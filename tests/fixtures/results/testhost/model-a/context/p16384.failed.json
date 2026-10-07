@@ -1,0 +1,5 @@
+{
+ "config": "p16384",
+ "exit_code": 1,
+ "stderr_tail": "out of memory"
+}

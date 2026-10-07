@@ -1,0 +1,24 @@
+{
+ "engine": "llama.cpp",
+ "host": {
+  "chip": "Synthetic Chip",
+  "cores_efficiency": 4,
+  "cores_performance": 2,
+  "cores_total": 6,
+  "host_slug": "testhost",
+  "llama_cpp_built_with": "test",
+  "llama_cpp_version": "0.0.0 (build 1, commit deadbeef)",
+  "macos": "0.0",
+  "macos_build": "TEST",
+  "memory_bytes": 8589934592,
+  "metal_note": "synthetic metal note",
+  "model_identifier": "Test1,1"
+ },
+ "kind": "context_length",
+ "model_file": "model-a.gguf",
+ "model_path": "models/model-a.gguf",
+ "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+ "schema": "edge-inference-bench/manifest/v1",
+ "smoke": false,
+ "timestamp": "2026-01-01T00:00:00Z"
+}

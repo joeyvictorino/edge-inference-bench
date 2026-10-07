@@ -1,0 +1,5 @@
+{
+ "config": "t2_b256_ub128_fa0_kvq8_0",
+ "exit_code": 1,
+ "stderr_tail": "V cache quantization requires flash_attn"
+}

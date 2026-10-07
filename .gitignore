@@ -1,0 +1,13 @@
+# model weights (fetched by scripts/fetch.sh, verified via models.lock)
+models/
+# local python environment for scripts/mlx_bench.py
+.venv/
+# scratch output of in-progress runs
+results/**/raw-tmp/
+# smoke-test output (never committed; see README "Smoke test")
+results/smoke/
+# hugging face / mlx download caches if redirected here
+.hf-cache/
+__pycache__/
+*.pyc
+.DS_Store

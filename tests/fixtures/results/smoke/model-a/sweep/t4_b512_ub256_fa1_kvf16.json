@@ -1,0 +1,54 @@
+[
+ {
+  "avg_ts": 1.0,
+  "build_commit": "deadbeef",
+  "build_number": 1,
+  "flash_attn": 1,
+  "model_filename": "models/model-a.gguf",
+  "model_n_params": 1000,
+  "model_size": 1000,
+  "model_type": "synthetic 1B Q4_K - Medium",
+  "n_batch": 512,
+  "n_depth": 0,
+  "n_gen": 0,
+  "n_prompt": 128,
+  "n_threads": 4,
+  "n_ubatch": 256,
+  "samples_ns": [
+   1000000000
+  ],
+  "samples_ts": [
+   1.0
+  ],
+  "stddev_ts": 0.0,
+  "test_time": "2026-01-01T00:00:00Z",
+  "type_k": "f16",
+  "type_v": "f16"
+ },
+ {
+  "avg_ts": 1.0,
+  "build_commit": "deadbeef",
+  "build_number": 1,
+  "flash_attn": 1,
+  "model_filename": "models/model-a.gguf",
+  "model_n_params": 1000,
+  "model_size": 1000,
+  "model_type": "synthetic 1B Q4_K - Medium",
+  "n_batch": 512,
+  "n_depth": 0,
+  "n_gen": 32,
+  "n_prompt": 0,
+  "n_threads": 4,
+  "n_ubatch": 256,
+  "samples_ns": [
+   1000000000
+  ],
+  "samples_ts": [
+   1.0
+  ],
+  "stddev_ts": 0.0,
+  "test_time": "2026-01-01T00:00:00Z",
+  "type_k": "f16",
+  "type_v": "f16"
+ }
+]

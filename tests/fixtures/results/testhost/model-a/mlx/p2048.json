@@ -1,0 +1,40 @@
+{
+ "engine": "mlx_lm",
+ "model_repo": "example/model-a-4bit",
+ "n_gen": 128,
+ "n_prompt": 2048,
+ "repetitions": 3,
+ "samples": [
+  {
+   "finish_reason": "length",
+   "generation_tokens": 128,
+   "generation_tps": 38.0,
+   "peak_memory_bytes": 1073741824,
+   "prompt_tokens": 2048,
+   "prompt_tps": 150.0,
+   "ttft_s": 13.653333333333334,
+   "wall_s": 1.0
+  },
+  {
+   "finish_reason": "length",
+   "generation_tokens": 128,
+   "generation_tps": 38.0,
+   "peak_memory_bytes": 1073741824,
+   "prompt_tokens": 2048,
+   "prompt_tps": 150.0,
+   "ttft_s": 13.653333333333334,
+   "wall_s": 1.0
+  },
+  {
+   "finish_reason": "length",
+   "generation_tokens": 128,
+   "generation_tps": 38.0,
+   "peak_memory_bytes": 1073741824,
+   "prompt_tokens": 2048,
+   "prompt_tps": 150.0,
+   "ttft_s": 13.653333333333334,
+   "wall_s": 1.0
+  }
+ ],
+ "schema": "edge-inference-bench/mlx/v1"
+}
