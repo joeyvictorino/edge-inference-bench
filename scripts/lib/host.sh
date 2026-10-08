@@ -144,6 +144,7 @@ cpu_idle_pct() {
 # LAST_IDLE to the last sample. Returns 1 if it is still busy after
 # QUIET_TIMEOUT seconds (default 900). QUIET_IDLE_MIN (default 85) is the
 # required idle percentage; QUIET_POLL (default 15) the gap between samples.
+# shellcheck disable=SC2034  # read by the scripts that source this file
 LAST_IDLE=0
 wait_for_quiet() {
   local min="${QUIET_IDLE_MIN:-85}" limit="${QUIET_TIMEOUT:-900}" poll="${QUIET_POLL:-15}" waited=0 idle
