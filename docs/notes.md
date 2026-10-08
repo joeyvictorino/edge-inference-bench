@@ -85,3 +85,16 @@ once while probing; the script uses `mx.device_info()`.
   and resumed on retry; the install completed.
 - `shellcheck` is not installed on the target machine, so shell linting runs
   only in CI.
+
+
+## 2026-10-07: first sweep discarded
+
+The first llama.cpp sweep (1.5B model, 96-configuration grid) was run on a laptop
+that was on battery, fell to 5% charge, and slept or woke more than a thousand
+times over the host's lifetime. One configuration sat suspended for 1 h 44 min
+before it was killed by hand, and other CPU-heavy work ran on the machine during
+the sweep. Those results were moved out of `results/` into a git-ignored
+quarantine directory and are not published, summarized or quoted. The scripts
+were then changed to refuse such conditions and to record them (see
+"Measurement conditions" in the README). The sweep has to be redone on mains
+power with nothing else running.

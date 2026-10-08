@@ -92,6 +92,37 @@ throughput and competes with anything else using the GPU or memory bandwidth.
 _Results pending._ No sweep has been run on this machine yet. This block is rewritten by `scripts/summarize.py` from the raw JSON under `results/`; it is never edited by hand.
 <!-- RESULTS:END -->
 
+## Measurement conditions
+
+A throughput number only means something if the machine was awake, on mains
+power and not doing other work while it was measured. The scripts enforce the
+first two and record them, and the third is on the operator.
+
+- `regenerate.sh` and `sweep.sh` refuse to start on battery. `ALLOW_BATTERY=1`
+  overrides that, but every result is then marked as made on battery.
+- `regenerate.sh` runs under `caffeinate` so the machine does not idle-sleep.
+- Each sweep configuration writes `<name>.env.json` (power source and battery
+  level before and after, wall time, whether it timed out, whether the machine
+  slept during it). The context-length and MLX stages write one
+  `stage-conditions.json` each.
+- A configuration during which the machine slept is kept as
+  `<name>.interrupted.json`, never counted, and retried on the next run.
+- A configuration still running after `CONFIG_TIMEOUT` seconds (default 1800)
+  is killed and recorded as failed.
+- `summarize.py` publishes a configuration or stage only if it ran on mains
+  power, did not sleep, did not time out, and has a conditions record. It
+  reports how many were excluded. A stage record that says the conditions were
+  bad is never overwritten by a later clean run; delete the stage directory to
+  redo it.
+- Close other applications and do not run builds or tests on the machine while
+  a sweep runs. Nothing here detects that, so a published run is only as clean
+  as the operator made it. The repetition spread (IQR) shown with every number
+  is the check: a wide spread on one configuration is a reason to rerun it.
+
+The first sweep on this repository's author's machine was run on battery with
+repeated sleeps and other work in the background. Its results were discarded
+rather than published; see `docs/notes.md`.
+
 ## Limitations
 
 - **8 GB unified memory.** The GPU working-set ceiling reported by MLX is
