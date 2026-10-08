@@ -27,6 +27,12 @@
 # which the machine slept is kept as <name>.interrupted.json, never counted,
 # and retried on the next run.
 #
+# Contention: before each configuration the script waits (up to QUIET_TIMEOUT
+# seconds, default 900) for the CPU to be at least QUIET_IDLE_MIN percent idle
+# (default 85) and records the level in <name>.env.json. A configuration that
+# never gets a quiet machine is not run, and the script exits 3. The check is
+# made at the start of a configuration; it cannot see work that starts during one.
+#
 # Environment overrides:
 #   SMOKE=1      one configuration, -p 128 -n 32 -r 1 (pipeline check only)
 #   REPS=n       repetitions (default 3)
@@ -72,7 +78,7 @@ write_manifest "$OUT" "$MODEL" "sweep" "$(jq -n \
   '{grid:{repetitions:($reps|tonumber), prompts:$prompts, gen:($gen|tonumber),
           threads:$threads, batches:$batches, flash_attn:$fa, kv_cache:$kv}, smoke:$smoke}')"
 
-total=0; done_n=0; skipped=0; failed=0; interrupted=0
+total=0; done_n=0; skipped=0; failed=0; interrupted=0; contended=0
 for t in $THREADS; do
   for bu in $BATCHES; do
     b="${bu%%:*}"; ub="${bu##*:}"
@@ -88,6 +94,12 @@ for t in $THREADS; do
           skipped=$((skipped + 1)); continue
         fi
         echo "[$name] -p $PROMPTS -n $GEN -r $REPS"
+        if ! wait_for_quiet; then
+          contended=$((contended + 1))
+          echo "  machine not idle (CPU ${LAST_IDLE}% idle, need ${QUIET_IDLE_MIN:-85}%); skipped $name, it will be retried"
+          continue
+        fi
+        idle_before=$LAST_IDLE
         power_before=$(power_json); sleep_before=$(sleep_stamp); started=$(date +%s)
         set +e
         llama-bench -m "$MODEL" -t "$t" -b "$b" -ub "$ub" -fa "$fa" \
@@ -113,9 +125,9 @@ for t in $THREADS; do
         # Conditions record: lets summarize.py exclude runs that were not clean.
         jq -n --argjson before "$power_before" --argjson after "$power_after" \
           --argjson slept "$slept" --argjson timed_out "$timed_out" \
-          --argjson seconds "$((ended - started))" \
+          --argjson seconds "$((ended - started))" --argjson idle "$idle_before" \
           '{power_before:$before, power_after:$after, slept_during_run:$slept,
-            timed_out:$timed_out, wall_seconds:$seconds}' > "$OUT/$name.env.json"
+            timed_out:$timed_out, wall_seconds:$seconds, cpu_idle_before_pct:$idle}' > "$OUT/$name.env.json"
         if [ "$slept" = true ]; then
           # The machine slept while this ran, so its timings include the sleep.
           # Keep the raw output for diagnosis but never count it; the next run retries it.
@@ -142,4 +154,8 @@ for t in $THREADS; do
   done
 done
 rmdir "$TMP" 2>/dev/null || true
-echo "sweep complete: $total configs, $done_n new, $skipped skipped, $failed failed, $interrupted interrupted -> $OUT"
+echo "sweep complete: $total configs, $done_n new, $skipped skipped, $failed failed, $interrupted interrupted, $contended not run (machine busy) -> $OUT"
+if [ "$contended" -gt 0 ]; then
+  echo "$contended configuration(s) were not run because the machine was busy; close other applications and run again." >&2
+  exit 3
+fi

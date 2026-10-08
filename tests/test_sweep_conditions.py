@@ -58,7 +58,7 @@ class SweepConditions(unittest.TestCase):
         # sleeps during a 2-second test must not change the outcome. Tests that
         # want a sleep pass ASSAY_SLEEP_STAMP_CMD themselves.
         e = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], SMOKE="1",
-                 TICK_FILE=os.path.join(self.tmp, "tick.n"), ASSAY_SLEEP_STAMP_CMD="echo constant")
+                 TICK_FILE=os.path.join(self.tmp, "tick.n"), ASSAY_SLEEP_STAMP_CMD="echo constant", ASSAY_CPU_IDLE_CMD="echo 99")
         e.update(env)
         return subprocess.run(["bash", SWEEP, self.model, self.out], env=e,
                               capture_output=True, text=True, timeout=120)
@@ -113,6 +113,29 @@ class SweepConditions(unittest.TestCase):
         self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
         self.assertIn("t4_b512_ub256_fa1_kvf16.json", self.files())
         self.assertNotIn("t4_b512_ub256_fa1_kvf16.interrupted.json", self.files())
+
+    def test_busy_machine_blocks_a_configuration_and_it_is_retried(self):
+        r = self.run_sweep(ASSAY_CPU_IDLE_CMD="echo 40", QUIET_TIMEOUT="2", QUIET_POLL="1")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("machine not idle", r.stdout)
+        self.assertNotIn("t4_b512_ub256_fa1_kvf16.json", self.files())
+        self.assertNotIn("t4_b512_ub256_fa1_kvf16.env.json", self.files())
+        r2 = self.run_sweep()
+        self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+        self.assertIn("t4_b512_ub256_fa1_kvf16.json", self.files())
+
+    def test_idle_level_is_recorded(self):
+        r = self.run_sweep(ASSAY_CPU_IDLE_CMD="echo 93.5")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.env_of("t4_b512_ub256_fa1_kvf16")["cpu_idle_before_pct"], 93.5)
+
+    def test_machine_that_quiets_down_is_waited_for(self):
+        # busy on the first sample, quiet on the second
+        flip = os.path.join(self.tmp, "flip.sh")
+        write_exe(flip, "#!/usr/bin/env bash\nf=\"$TICK_FILE.idle\"; n=$(cat \"$f\" 2>/dev/null || echo 0); echo $((n+1)) > \"$f\"; [ \"$n\" -ge 1 ] && echo 96 || echo 30\n")
+        r = self.run_sweep(ASSAY_CPU_IDLE_CMD=flip, QUIET_POLL="1", QUIET_TIMEOUT="10")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.env_of("t4_b512_ub256_fa1_kvf16")["cpu_idle_before_pct"], 96)
 
 
 if __name__ == "__main__":

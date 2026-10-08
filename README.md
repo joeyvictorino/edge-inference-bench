@@ -114,10 +114,14 @@ first two and record them, and the third is on the operator.
   reports how many were excluded. A stage record that says the conditions were
   bad is never overwritten by a later clean run; delete the stage directory to
   redo it.
-- Close other applications and do not run builds or tests on the machine while
-  a sweep runs. Nothing here detects that, so a published run is only as clean
-  as the operator made it. The repetition spread (IQR) shown with every number
-  is the check: a wide spread on one configuration is a reason to rerun it.
+- Before each configuration (and each context-length or MLX stage) the scripts
+  wait up to `QUIET_TIMEOUT` seconds (default 900) for the CPU to be at least
+  `QUIET_IDLE_MIN` percent idle (default 85) and record the level as
+  `cpu_idle_before_pct`. If the machine never quiets down, that configuration
+  is not run and the script exits 3. Close other applications first. The check
+  happens at the start of a configuration, so work that starts during one is
+  not detected; the repetition spread (IQR) shown with every number is the
+  second check, and a wide spread is a reason to rerun that configuration.
 
 The first sweep on this repository's author's machine was run on battery with
 repeated sleeps and other work in the background. Its results were discarded

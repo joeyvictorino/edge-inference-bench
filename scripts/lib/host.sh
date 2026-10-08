@@ -131,3 +131,27 @@ power_json() {
   jq -n --arg source "$(power_source)" --argjson pct "$(battery_pct || echo null)" \
     '{source:$source, battery_pct:$pct}'
 }
+
+# ---- CPU contention ----------------------------------------------------------
+# cpu_idle_pct: percentage of CPU idle over a 2-second window (top's second
+# sample). ASSAY_CPU_IDLE_CMD lets tests inject a number.
+cpu_idle_pct() {
+  if [ -n "${ASSAY_CPU_IDLE_CMD:-}" ]; then ${ASSAY_CPU_IDLE_CMD}; return; fi
+  top -l 2 -n 0 -s 2 2>/dev/null | grep 'CPU usage' | tail -1 | sed -E 's/.* ([0-9.]+)% idle.*/\1/'
+}
+
+# wait_for_quiet: poll until the machine is idle enough to benchmark. Sets
+# LAST_IDLE to the last sample. Returns 1 if it is still busy after
+# QUIET_TIMEOUT seconds (default 900). QUIET_IDLE_MIN (default 85) is the
+# required idle percentage; QUIET_POLL (default 15) the gap between samples.
+LAST_IDLE=0
+wait_for_quiet() {
+  local min="${QUIET_IDLE_MIN:-85}" limit="${QUIET_TIMEOUT:-900}" poll="${QUIET_POLL:-15}" waited=0 idle
+  while :; do
+    idle=$(cpu_idle_pct); idle=${idle:-0}
+    LAST_IDLE=$idle
+    if awk -v i="$idle" -v m="$min" 'BEGIN{exit !(i>=m)}'; then return 0; fi
+    [ "$waited" -ge "$limit" ] && return 1
+    sleep "$poll"; waited=$((waited + poll))
+  done
+}

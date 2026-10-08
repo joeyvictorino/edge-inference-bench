@@ -35,6 +35,10 @@ fi
 run_stage() {
   local dir="$1"; shift
   mkdir -p "$dir"
+  if ! wait_for_quiet; then
+    echo "machine not idle (CPU ${LAST_IDLE}% idle, need ${QUIET_IDLE_MIN:-85}%); not running $dir. Close other applications and run again." >&2
+    return 3
+  fi
   local sig_before sig_after pb sb pa sa slept=false rc=0
   sig_before=$(find "$dir" -maxdepth 1 -type f ! -name stage-conditions.json -exec basename {} \; | sort | shasum | cut -d' ' -f1)
   pb=$(power_json); sb=$(sleep_stamp)
