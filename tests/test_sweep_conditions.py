@@ -138,5 +138,36 @@ class SweepConditions(unittest.TestCase):
         self.assertEqual(self.env_of("t4_b512_ub256_fa1_kvf16")["cpu_idle_before_pct"], 96)
 
 
+class PowerHelpers(unittest.TestCase):
+    """power_source must not be fooled by SIGPIPE under pipefail."""
+
+    def test_power_source_survives_a_chatty_pmset_under_pipefail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = os.path.join(tmp, "bin")
+            os.makedirs(bin_dir)
+            # first line says AC; then a lot more output, so a reader that
+            # stops after one line would make this process die of SIGPIPE
+            write_exe(os.path.join(bin_dir, "pmset"),
+                      "#!/usr/bin/env bash\necho \"Now drawing from 'AC Power'\"\nfor i in $(seq 1 5000); do echo \"line $i 55%\"; done\n")
+            script = "set -euo pipefail; source scripts/lib/host.sh; for i in 1 2 3 4 5 6 7 8 9 10; do power_source; done; battery_pct"
+            r = subprocess.run(["bash", "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=60,
+                               env=dict(os.environ, PATH=bin_dir + os.pathsep + os.environ["PATH"]))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            lines = r.stdout.split()
+            self.assertEqual(lines[:10], ["AC"] * 10, r.stdout)
+            self.assertEqual(lines[10], "55")
+
+    def test_battery_is_reported_as_battery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = os.path.join(tmp, "bin")
+            os.makedirs(bin_dir)
+            write_exe(os.path.join(bin_dir, "pmset"),
+                      "#!/usr/bin/env bash\necho \"Now drawing from 'Battery Power'\"\necho \" -InternalBattery-0\t5%; discharging\"\n")
+            r = subprocess.run(["bash", "-c", "set -euo pipefail; source scripts/lib/host.sh; power_source; battery_pct"],
+                               cwd=ROOT, capture_output=True, text=True, timeout=60,
+                               env=dict(os.environ, PATH=bin_dir + os.pathsep + os.environ["PATH"]))
+            self.assertEqual(r.stdout.split(), ["Battery", "5"], r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -110,10 +110,21 @@ write_manifest() {
 # power and not otherwise occupied while it was measured. These helpers let the
 # scripts refuse to run on battery and notice a sleep in the middle of a run.
 
+# Output is captured before it is inspected: piping pmset into head and grep
+# under `set -o pipefail` can report a spurious failure when pmset is still
+# writing after head has closed the pipe, which would misreport mains power as
+# battery.
 power_source() {
-  if pmset -g batt 2>/dev/null | head -1 | grep -q "AC Power"; then echo AC; else echo Battery; fi
+  local out first
+  out=$(pmset -g batt 2>/dev/null) || true
+  first=${out%%$'\n'*}
+  case "$first" in *"AC Power"*) echo AC ;; *) echo Battery ;; esac
 }
-battery_pct() { pmset -g batt 2>/dev/null | grep -Eo '[0-9]+%' | head -1 | tr -d '%'; }
+battery_pct() {
+  local out
+  out=$(pmset -g batt 2>/dev/null) || true
+  awk 'match($0, /[0-9]+%/) { print substr($0, RSTART, RLENGTH - 1); exit }' <<<"$out"
+}
 # Changes whenever the machine goes to sleep; compare before and after a run.
 # ASSAY_SLEEP_STAMP_CMD lets tests inject a command that simulates a sleep.
 sleep_stamp() { ${ASSAY_SLEEP_STAMP_CMD:-sysctl -n kern.sleeptime} 2>/dev/null | tr -d '\n' || echo none; }
@@ -144,7 +155,8 @@ cpu_idle_pct() {
 # LAST_IDLE to the last sample. Returns 1 if it is still busy after
 # QUIET_TIMEOUT seconds (default 900). QUIET_IDLE_MIN (default 85) is the
 # required idle percentage; QUIET_POLL (default 15) the gap between samples.
-# shellcheck disable=SC2034  # read by the scripts that source this file
+# LAST_IDLE is read by the scripts that source this file.
+# shellcheck disable=SC2034
 LAST_IDLE=0
 wait_for_quiet() {
   local min="${QUIET_IDLE_MIN:-85}" limit="${QUIET_TIMEOUT:-900}" poll="${QUIET_POLL:-15}" waited=0 idle
