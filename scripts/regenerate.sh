@@ -36,12 +36,12 @@ run_stage() {
   local dir="$1"; shift
   mkdir -p "$dir"
   local sig_before sig_after pb sb pa sa slept=false rc=0
-  sig_before=$(ls -1 "$dir" | grep -v '^stage-conditions.json$' | shasum | cut -d' ' -f1)
+  sig_before=$(find "$dir" -maxdepth 1 -type f ! -name stage-conditions.json -exec basename {} \; | sort | shasum | cut -d' ' -f1)
   pb=$(power_json); sb=$(sleep_stamp)
   "$@" || rc=$?
   pa=$(power_json); sa=$(sleep_stamp)
   [ "$sb" = "$sa" ] || slept=true
-  sig_after=$(ls -1 "$dir" | grep -v '^stage-conditions.json$' | shasum | cut -d' ' -f1)
+  sig_after=$(find "$dir" -maxdepth 1 -type f ! -name stage-conditions.json -exec basename {} \; | sort | shasum | cut -d' ' -f1)
   local rec="$dir/stage-conditions.json"
   if [ "$sig_before" != "$sig_after" ]; then
     local prev_dirty=false
