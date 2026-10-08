@@ -1,0 +1,12 @@
+{
+  "power_before": {
+    "source": "AC",
+    "battery_pct": 100
+  },
+  "power_after": {
+    "source": "AC",
+    "battery_pct": 100
+  },
+  "slept_during_run": false,
+  "timed_out": false
+}

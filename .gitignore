@@ -11,3 +11,6 @@ results/smoke/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Raw results taken under uncontrolled conditions (see WHY.md inside)
+results/_quarantine-*/

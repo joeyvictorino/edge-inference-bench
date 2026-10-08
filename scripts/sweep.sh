@@ -20,6 +20,13 @@
 # sweep continues. summarize.py counts failed configurations but never
 # reports numbers from them.
 #
+# Measurement conditions: refuses to run on battery (ALLOW_BATTERY=1 to
+# override; such runs are recorded and excluded from summaries), kills a
+# configuration that runs longer than CONFIG_TIMEOUT seconds (default 1800),
+# and records <name>.env.json beside every result. A configuration during
+# which the machine slept is kept as <name>.interrupted.json, never counted,
+# and retried on the next run.
+#
 # Environment overrides:
 #   SMOKE=1      one configuration, -p 128 -n 32 -r 1 (pipeline check only)
 #   REPS=n       repetitions (default 3)
@@ -38,6 +45,8 @@ if [ -z "$MODEL" ] || [ -z "$OUT" ]; then
 fi
 [ -f "$MODEL" ] || { echo "model not found: $MODEL" >&2; exit 1; }
 command -v llama-bench >/dev/null || { echo "llama-bench not on PATH" >&2; exit 1; }
+require_ac_power
+CONFIG_TIMEOUT="${CONFIG_TIMEOUT:-1800}"   # seconds; a configuration still running after this is killed and recorded
 
 REPS="${REPS:-3}"
 PROMPTS="${PROMPTS:-512,2048,8192}"
@@ -63,7 +72,7 @@ write_manifest "$OUT" "$MODEL" "sweep" "$(jq -n \
   '{grid:{repetitions:($reps|tonumber), prompts:$prompts, gen:($gen|tonumber),
           threads:$threads, batches:$batches, flash_attn:$fa, kv_cache:$kv}, smoke:$smoke}')"
 
-total=0; done_n=0; skipped=0; failed=0
+total=0; done_n=0; skipped=0; failed=0; interrupted=0
 for t in $THREADS; do
   for bu in $BATCHES; do
     b="${bu%%:*}"; ub="${bu##*:}"
@@ -79,16 +88,45 @@ for t in $THREADS; do
           skipped=$((skipped + 1)); continue
         fi
         echo "[$name] -p $PROMPTS -n $GEN -r $REPS"
+        power_before=$(power_json); sleep_before=$(sleep_stamp); started=$(date +%s)
         set +e
         llama-bench -m "$MODEL" -t "$t" -b "$b" -ub "$ub" -fa "$fa" \
           -ctk "$kv" -ctv "$kv" -p "$PROMPTS" -n "$GEN" -r "$REPS" \
-          -o json > "$TMP/$name.json" 2> "$TMP/$name.stderr"
+          -o json > "$TMP/$name.json" 2> "$TMP/$name.stderr" &
+        bench_pid=$!
+        # Watchdog: polls once a second and ends by itself when the benchmark
+        # does, so it never leaves a long sleep behind holding our output open.
+        ( i=0
+          while [ "$i" -lt "$CONFIG_TIMEOUT" ] && kill -0 "$bench_pid" 2>/dev/null; do
+            sleep 1; i=$((i + 1))
+          done
+          kill "$bench_pid" 2>/dev/null ) &
+        watchdog_pid=$!
+        wait "$bench_pid"
         rc=$?
+        wait "$watchdog_pid" 2>/dev/null
         set -e
-        if [ $rc -eq 0 ] && jq -e 'type=="array" and length>0' "$TMP/$name.json" >/dev/null 2>&1; then
+        ended=$(date +%s)
+        power_after=$(power_json); sleep_after=$(sleep_stamp)
+        slept=false; [ "$sleep_before" = "$sleep_after" ] || slept=true
+        timed_out=false; [ $rc -eq 143 ] && [ $((ended - started)) -ge "$CONFIG_TIMEOUT" ] && timed_out=true
+        # Conditions record: lets summarize.py exclude runs that were not clean.
+        jq -n --argjson before "$power_before" --argjson after "$power_after" \
+          --argjson slept "$slept" --argjson timed_out "$timed_out" \
+          --argjson seconds "$((ended - started))" \
+          '{power_before:$before, power_after:$after, slept_during_run:$slept,
+            timed_out:$timed_out, wall_seconds:$seconds}' > "$OUT/$name.env.json"
+        if [ "$slept" = true ]; then
+          # The machine slept while this ran, so its timings include the sleep.
+          # Keep the raw output for diagnosis but never count it; the next run retries it.
+          [ -s "$TMP/$name.json" ] && mv "$TMP/$name.json" "$OUT/$name.interrupted.json"
+          rm -f "$TMP/$name.json" "$TMP/$name.stderr"
+          interrupted=$((interrupted + 1))
+          echo "  interrupted by system sleep; recorded $name.interrupted.json (will be retried)"
+        elif [ $rc -eq 0 ] && jq -e 'type=="array" and length>0' "$TMP/$name.json" >/dev/null 2>&1; then
           # keep the raw llama-bench array; add nothing (manifest carries the host data)
           mv "$TMP/$name.json" "$final"
-          rm -f "$TMP/$name.stderr" "$OUT/$name.failed.json"
+          rm -f "$TMP/$name.stderr" "$OUT/$name.failed.json" "$OUT/$name.interrupted.json"
           done_n=$((done_n + 1))
         else
           failed=$((failed + 1))
@@ -104,4 +142,4 @@ for t in $THREADS; do
   done
 done
 rmdir "$TMP" 2>/dev/null || true
-echo "sweep complete: $total configs, $done_n new, $skipped skipped, $failed failed -> $OUT"
+echo "sweep complete: $total configs, $done_n new, $skipped skipped, $failed failed, $interrupted interrupted -> $OUT"

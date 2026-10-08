@@ -19,6 +19,43 @@ cd "$ROOT"
 # shellcheck source=lib/host.sh
 source "$ROOT/scripts/lib/host.sh"
 
+# Measurement conditions (see README, "Measurement conditions"): mains power,
+# machine awake, nothing else running. Refuse on battery, and keep the machine
+# from idle-sleeping by re-running this script under caffeinate.
+require_ac_power
+if [ -z "${ASSAY_CAFFEINATED:-}" ] && command -v caffeinate >/dev/null 2>&1; then
+  export ASSAY_CAFFEINATED=1
+  exec caffeinate -dimsu "$0" "$@"
+fi
+
+# run_stage DIR CMD...: run a stage and record the conditions it ran under in
+# DIR/stage-conditions.json. A record that already says the conditions were
+# bad is never overwritten by a later clean run (delete the stage directory to
+# redo it); an invocation that added no files leaves the record alone.
+run_stage() {
+  local dir="$1"; shift
+  mkdir -p "$dir"
+  local sig_before sig_after pb sb pa sa slept=false rc=0
+  sig_before=$(ls -1 "$dir" | grep -v '^stage-conditions.json$' | shasum | cut -d' ' -f1)
+  pb=$(power_json); sb=$(sleep_stamp)
+  "$@" || rc=$?
+  pa=$(power_json); sa=$(sleep_stamp)
+  [ "$sb" = "$sa" ] || slept=true
+  sig_after=$(ls -1 "$dir" | grep -v '^stage-conditions.json$' | shasum | cut -d' ' -f1)
+  local rec="$dir/stage-conditions.json"
+  if [ "$sig_before" != "$sig_after" ]; then
+    local prev_dirty=false
+    if [ -s "$rec" ] && [ "$(jq -r '(.power_before.source != "AC") or (.power_after.source != "AC") or .slept_during_run' "$rec")" = "true" ]; then
+      prev_dirty=true
+    fi
+    if [ "$prev_dirty" = false ]; then
+      jq -n --argjson before "$pb" --argjson after "$pa" --argjson slept "$slept" \
+        '{power_before:$before, power_after:$after, slept_during_run:$slept, timed_out:false}' > "$rec"
+    fi
+  fi
+  return $rc
+}
+
 if [ "$#" -gt 0 ]; then IDS=("$@"); else
   IDS=()
   while IFS= read -r line; do IDS+=("$line"); done < <(python3 scripts/lib/modelsyaml.py ids)
@@ -35,10 +72,10 @@ for id in "${IDS[@]}"; do
   echo "=== $id"
   scripts/fetch.sh "$id"
   scripts/sweep.sh "models/$file" "$HOST_DIR/$id/sweep"
-  scripts/context_length.sh "models/$file" "$HOST_DIR/$id/context"
+  run_stage "$HOST_DIR/$id/context" scripts/context_length.sh "models/$file" "$HOST_DIR/$id/context"
   if [ -n "$mlx" ] && [ "${SKIP_MLX:-0}" != "1" ]; then
     if [ -x .venv/bin/python ]; then
-      .venv/bin/python scripts/mlx_bench.py --model "$mlx" --out "$HOST_DIR/$id/mlx" \
+      run_stage "$HOST_DIR/$id/mlx" .venv/bin/python scripts/mlx_bench.py --model "$mlx" --out "$HOST_DIR/$id/mlx" \
         ${SMOKE:+--smoke} || echo "mlx_bench failed for $id (continuing)"
     else
       echo "no .venv; skipping MLX. Create it with: python3 -m venv .venv && .venv/bin/pip install mlx-lm"

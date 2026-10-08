@@ -103,13 +103,23 @@ def load_sweep(d):
     manifest = read_manifest(d)
     configs = {}
     failed = sorted(os.path.basename(p)[: -len(".failed.json")] for p in glob.glob(os.path.join(d, "*.failed.json")))
+    interrupted = sorted(os.path.basename(p)[: -len(".interrupted.json")] for p in glob.glob(os.path.join(d, "*.interrupted.json")))
+    excluded = {}
     for path in sorted(glob.glob(os.path.join(d, "*.json"))):
         base = os.path.basename(path)
-        if base == "manifest.json" or base.endswith(".failed.json"):
+        if base == "manifest.json" or base.endswith((".failed.json", ".interrupted.json", ".env.json")):
             continue
         name = base[:-5]
         cfg = parse_config_name(name)
         if cfg is None:
+            continue
+        # Numbers are published only for runs made under controlled
+        # conditions: mains power, no sleep during the run, no timeout. A
+        # missing conditions record (results from before it existed) is not
+        # trusted either.
+        why = uncontrolled_reason(os.path.join(d, name + ".env.json"))
+        if why:
+            excluded[name] = why
             continue
         records = load_json(path)
         if not isinstance(records, list) or not records:
@@ -117,7 +127,25 @@ def load_sweep(d):
         configs[name] = {"config": cfg, "tests": llama_tests(records),
                          "model_type": records[0].get("model_type", ""),
                          "model_size": records[0].get("model_size")}
-    return {"manifest": manifest, "configs": configs, "failed": failed}
+    return {"manifest": manifest, "configs": configs, "failed": failed,
+            "interrupted": interrupted, "excluded": excluded}
+
+
+def uncontrolled_reason(env_path):
+    """Why a configuration's conditions disqualify it, or '' if it is clean."""
+    if not os.path.exists(env_path):
+        return "no conditions record"
+    env = load_json(env_path)
+    if not isinstance(env, dict):
+        return "unreadable conditions record"
+    for key in ("power_before", "power_after"):
+        if (env.get(key) or {}).get("source") != "AC":
+            return "not on mains power"
+    if env.get("slept_during_run"):
+        return "machine slept during the run"
+    if env.get("timed_out"):
+        return "timed out"
+    return ""
 
 
 def load_context(d):
@@ -139,7 +167,10 @@ def load_context(d):
         tg_key = next((k for k in tests if k.startswith("tg")), None)
         points[int(m.group(1))] = {"pp": pp, "tg": tests.get(tg_key) if tg_key else None,
                                    "tg_len": int(tg_key[2:]) if tg_key else None}
-    return {"manifest": manifest, "points": points, "failed": failed}
+    excluded_stage = uncontrolled_reason(os.path.join(d, "stage-conditions.json")) if points else ""
+    if excluded_stage:
+        points = {}
+    return {"manifest": manifest, "points": points, "failed": failed, "excluded_stage": excluded_stage}
 
 
 def load_mlx(d):
@@ -162,7 +193,10 @@ def load_mlx(d):
             "n_gen": int(rec.get("n_gen", 0)),
             "generation_tokens": med_iqr([x.get("generation_tokens", rec.get("n_gen", 0)) for x in s]),
         }
-    return {"manifest": manifest, "points": points, "failed": failed}
+    excluded_stage = uncontrolled_reason(os.path.join(d, "stage-conditions.json")) if points else ""
+    if excluded_stage:
+        points = {}
+    return {"manifest": manifest, "points": points, "failed": failed, "excluded_stage": excluded_stage}
 
 
 def load_host(host_dir):
@@ -240,6 +274,9 @@ def summarize_host(host_dir):
                 "n_configs_ok": len(sw["configs"]),
                 "n_configs_failed": len(sw["failed"]),
                 "failed": sw["failed"],
+                "n_configs_interrupted": len(sw["interrupted"]),
+                "n_configs_excluded_conditions": len(sw["excluded"]),
+                "excluded_conditions": sw["excluded"],
                 "llama_cpp_version": (sw["manifest"].get("host") or {}).get("llama_cpp_version"),
                 "model_sha256": sw["manifest"].get("model_sha256"),
                 "best": None,
@@ -252,11 +289,11 @@ def summarize_host(host_dir):
                                       "model_type": sw["configs"][name]["model_type"]}
         if "context" in entry:
             cx = entry["context"]
-            m["context"] = {"failed": cx["failed"],
+            m["context"] = {"failed": cx["failed"], "excluded_stage": cx["excluded_stage"],
                             "points": {str(k): v for k, v in sorted(cx["points"].items())}}
         if "mlx" in entry:
             ml = entry["mlx"]
-            m["mlx"] = {"failed": ml["failed"],
+            m["mlx"] = {"failed": ml["failed"], "excluded_stage": ml["excluded_stage"],
                         "model_repo": ml["manifest"].get("model_repo"),
                         "engine_versions": ml["manifest"].get("engine_versions"),
                         "points": {str(k): v for k, v in sorted(ml["points"].items())}}
@@ -298,7 +335,7 @@ def render_markdown(summary):
     L.append("")
     pp_cols = sorted({int(k[2:]) for m in summary["models"].values()
                       for k in ((m.get("sweep") or {}).get("best") or {}).get("tests", {}) if k.startswith("pp")})
-    header = ["Model", "Configuration", "Generation t/s"] + ["Prompt %d t/s" % p for p in pp_cols] + ["Configs ok/failed"]
+    header = ["Model", "Configuration", "Generation t/s"] + ["Prompt %d t/s" % p for p in pp_cols] + ["Configs ok/failed/excluded"]
     L.append("| " + " | ".join(header) + " |")
     L.append("|" + "|".join("---" for _ in header) + "|")
     for mid, m in summary["models"].items():
@@ -311,7 +348,7 @@ def render_markdown(summary):
         else:
             row = ["`%s`" % mid, config_label(b["config"]), "%s (%s)" % (fmt(b["tests"][b["tg_key"]]), b["tg_key"])]
             row += [fmt(b["tests"].get("pp%d" % p)) for p in pp_cols]
-        row.append("%d/%d" % (sw["n_configs_ok"], sw["n_configs_failed"]))
+        row.append("%d/%d/%d" % (sw["n_configs_ok"], sw["n_configs_failed"], sw["n_configs_excluded_conditions"]))
         L.append("| " + " | ".join(row) + " |")
     L.append("")
 

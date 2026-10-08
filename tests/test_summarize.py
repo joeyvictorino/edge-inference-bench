@@ -92,13 +92,122 @@ class LoadingTests(TempResults):
         self.assertIsNone(summarize.parse_config_name("manifest"))
 
 
+class ConditionsTests(TempResults):
+    """Only runs made under controlled conditions may be published."""
+
+    def sweep_dir(self):
+        return os.path.join(self.results, "testhost", "model-a", "sweep")
+
+    def set_env(self, name, **changes):
+        path = os.path.join(self.sweep_dir(), name + ".env.json")
+        with open(path) as fh:
+            env = json.load(fh)
+        for key, value in changes.items():
+            env[key] = value
+        with open(path, "w") as fh:
+            json.dump(env, fh)
+
+    def load(self):
+        return summarize.load_sweep(self.sweep_dir())
+
+    def test_clean_fixture_has_nothing_excluded(self):
+        sw = self.load()
+        self.assertEqual(sw["excluded"], {})
+        self.assertEqual(len(sw["configs"]), 2)
+
+    def test_battery_before_or_after_is_excluded(self):
+        self.set_env("t4_b512_ub256_fa1_kvf16", power_before={"source": "Battery", "battery_pct": 5})
+        sw = self.load()
+        self.assertEqual(sw["excluded"], {"t4_b512_ub256_fa1_kvf16": "not on mains power"})
+        self.assertNotIn("t4_b512_ub256_fa1_kvf16", sw["configs"])
+        self.set_env("t6_b1024_ub512_fa1_kvq8_0", power_after={"source": "Battery", "battery_pct": 90})
+        self.assertEqual(self.load()["configs"], {})
+
+    def test_sleep_and_timeout_are_excluded(self):
+        self.set_env("t4_b512_ub256_fa1_kvf16", slept_during_run=True)
+        self.set_env("t6_b1024_ub512_fa1_kvq8_0", timed_out=True)
+        sw = self.load()
+        self.assertEqual(sw["excluded"], {"t4_b512_ub256_fa1_kvf16": "machine slept during the run",
+                                          "t6_b1024_ub512_fa1_kvq8_0": "timed out"})
+
+    def test_missing_conditions_record_is_not_trusted(self):
+        os.remove(os.path.join(self.sweep_dir(), "t4_b512_ub256_fa1_kvf16.env.json"))
+        sw = self.load()
+        self.assertEqual(sw["excluded"], {"t4_b512_ub256_fa1_kvf16": "no conditions record"})
+
+    def test_interrupted_files_are_listed_never_read(self):
+        with open(os.path.join(self.sweep_dir(), "t2_b256_ub128_fa1_kvf16.interrupted.json"), "w") as fh:
+            fh.write("[]")
+        sw = self.load()
+        self.assertEqual(sw["interrupted"], ["t2_b256_ub128_fa1_kvf16"])
+        self.assertNotIn("t2_b256_ub128_fa1_kvf16", sw["configs"])
+
+    def test_excluded_count_reaches_the_summary_and_table(self):
+        self.set_env("t4_b512_ub256_fa1_kvf16", slept_during_run=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            summarize.main([os.path.join(self.results, "testhost"), "--no-readme"])
+        with open(os.path.join(self.results, "testhost", "summary.json")) as fh:
+            summary = json.load(fh)
+        sw = summary["models"]["model-a"]["sweep"]
+        self.assertEqual(sw["n_configs_excluded_conditions"], 1)
+        self.assertEqual(sw["excluded_conditions"], {"t4_b512_ub256_fa1_kvf16": "machine slept during the run"})
+        with open(os.path.join(self.results, "testhost", "summary.md")) as fh:
+            self.assertIn("ok/failed/excluded", fh.read())
+
+
+class StageConditionsTests(TempResults):
+    """The context-length and MLX stages are published or excluded as a whole."""
+
+    def stage_dir(self, stage):
+        return os.path.join(self.results, "testhost", "model-a", stage)
+
+    def write_conditions(self, stage, **changes):
+        path = os.path.join(self.stage_dir(stage), "stage-conditions.json")
+        with open(path) as fh:
+            rec = json.load(fh)
+        rec.update(changes)
+        with open(path, "w") as fh:
+            json.dump(rec, fh)
+
+    def test_clean_stages_are_published(self):
+        self.assertTrue(summarize.load_context(self.stage_dir("context"))["points"])
+        self.assertTrue(summarize.load_mlx(self.stage_dir("mlx"))["points"])
+
+    def test_context_stage_on_battery_is_excluded_whole(self):
+        self.write_conditions("context", power_before={"source": "Battery", "battery_pct": 5})
+        cx = summarize.load_context(self.stage_dir("context"))
+        self.assertEqual(cx["points"], {})
+        self.assertEqual(cx["excluded_stage"], "not on mains power")
+
+    def test_mlx_stage_that_slept_is_excluded_whole(self):
+        self.write_conditions("mlx", slept_during_run=True)
+        ml = summarize.load_mlx(self.stage_dir("mlx"))
+        self.assertEqual(ml["points"], {})
+        self.assertEqual(ml["excluded_stage"], "machine slept during the run")
+
+    def test_stage_without_a_conditions_record_is_excluded(self):
+        os.remove(os.path.join(self.stage_dir("context"), "stage-conditions.json"))
+        cx = summarize.load_context(self.stage_dir("context"))
+        self.assertEqual(cx["points"], {})
+        self.assertEqual(cx["excluded_stage"], "no conditions record")
+
+    def test_exclusion_is_visible_in_summary_json(self):
+        self.write_conditions("mlx", slept_during_run=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            summarize.main([os.path.join(self.results, "testhost"), "--no-readme"])
+        with open(os.path.join(self.results, "testhost", "summary.json")) as fh:
+            summary = json.load(fh)
+        self.assertEqual(summary["models"]["model-a"]["mlx"]["excluded_stage"], "machine slept during the run")
+        self.assertEqual(summary["models"]["model-a"]["mlx"]["points"], {})
+
+
 class RenderTests(TempResults):
     def test_markdown_tables(self):
         s = summarize.summarize_host(os.path.join(self.results, "testhost"))
         md = summarize.render_markdown(s)
         self.assertIn("# Results: testhost", md)
-        self.assertIn("| `model-a` | t=6 b=1024 ub=512 fa=on kv=q8_0 | 30.0 (IQR 5.0) (tg128) | 131.0 (IQR 1.0) | 102.0 (IQR 1.0) | 2/1 |", md)
-        self.assertIn("| `model-b` | t=2 b=256 ub=128 fa=off kv=f16 | 10.0 (n=1) (tg128) | 50.0 (n=1) | n/a | 1/0 |", md)
+        self.assertIn("| `model-a` | t=6 b=1024 ub=512 fa=on kv=q8_0 | 30.0 (IQR 5.0) (tg128) | 131.0 (IQR 1.0) | 102.0 (IQR 1.0) | 2/1/0 |", md)
+        self.assertIn("| `model-b` | t=2 b=256 ub=128 fa=off kv=f16 | 10.0 (n=1) (tg128) | 50.0 (n=1) | n/a | 1/0/0 |", md)
         self.assertIn("| 2048 | 82.0 (IQR 2.0) |", md)
         self.assertIn("### `model-a` vs `example/model-a-4bit`", md)
         self.assertIn("| 512 | 100.0 (IQR 0.0) | 210.0 (IQR 10.0) | 20.0 (IQR 0.0) | 41.0 (IQR 1.0) | 128 | 2.438 (IQR 0.116) | 1024 |", md)

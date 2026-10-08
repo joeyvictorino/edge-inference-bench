@@ -104,3 +104,30 @@ write_manifest() {
       model_path:$model_path, model_file:$model_file, model_sha256:$model_sha256,
       timestamp:$timestamp, host:.} + $extra' > "$out/manifest.json"
 }
+
+# ---- measurement conditions -------------------------------------------------
+# A throughput number is only meaningful if the machine was awake, on mains
+# power and not otherwise occupied while it was measured. These helpers let the
+# scripts refuse to run on battery and notice a sleep in the middle of a run.
+
+power_source() {
+  if pmset -g batt 2>/dev/null | head -1 | grep -q "AC Power"; then echo AC; else echo Battery; fi
+}
+battery_pct() { pmset -g batt 2>/dev/null | grep -Eo '[0-9]+%' | head -1 | tr -d '%'; }
+# Changes whenever the machine goes to sleep; compare before and after a run.
+# ASSAY_SLEEP_STAMP_CMD lets tests inject a command that simulates a sleep.
+sleep_stamp() { ${ASSAY_SLEEP_STAMP_CMD:-sysctl -n kern.sleeptime} 2>/dev/null | tr -d '\n' || echo none; }
+
+require_ac_power() {
+  if [ "$(power_source)" != "AC" ] && [ "${ALLOW_BATTERY:-0}" != "1" ]; then
+    echo "refusing to benchmark on battery ($(battery_pct)%): plug in, or set ALLOW_BATTERY=1" >&2
+    echo "(runs made on battery are recorded as such and excluded from published summaries)" >&2
+    exit 2
+  fi
+}
+
+# power_json -> {"source":"AC|Battery","battery_pct":N}
+power_json() {
+  jq -n --arg source "$(power_source)" --argjson pct "$(battery_pct || echo null)" \
+    '{source:$source, battery_pct:$pct}'
+}
