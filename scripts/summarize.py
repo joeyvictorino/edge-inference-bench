@@ -283,6 +283,7 @@ def summarize_host(host_dir):
         "smoke": smoke,
         "models": {},
     }
+    summary["reproducibility"] = load_reproducibility(host_dir)
     for mid, entry in models.items():
         m = {}
         if "sweep" in entry:
@@ -322,6 +323,21 @@ def summarize_host(host_dir):
     return summary
 
 
+def load_reproducibility(host_dir):
+    """Replica comparisons written by compare_runs.py for this host, found at
+    <results>/replicas/<host>/<replica>/compare.json. Only the per-model
+    counts are carried into the summary; the full table stays beside the
+    replica."""
+    host = os.path.basename(os.path.normpath(host_dir))
+    pattern = os.path.join(os.path.dirname(os.path.normpath(host_dir)), "replicas", host, "*", "compare.json")
+    out = []
+    for path in sorted(glob.glob(pattern)):
+        cmp = load_json(path)
+        out.append({"replica": os.path.basename(os.path.dirname(path)), "rule": cmp.get("rule"),
+                    "by_model": cmp.get("by_model", {})})
+    return out
+
+
 # ---------------------------------------------------------------- rendering
 def render_markdown(summary):
     L = []
@@ -358,6 +374,15 @@ def render_markdown(summary):
         if ts["first"]:
             L.append("Data collected between %s and %s (UTC)." % (ts["first"], ts["last"]))
         L.append("")
+    for rep in summary.get("reproducibility") or []:
+        for mid, m in sorted(rep["by_model"].items()):
+            if m["metrics"] and m["within_published_iqr"] < m["metrics"]:
+                L.append("> **Not reproduced (`%s`).** A second run on another runner (`%s`) matched %d of %d "
+                         "metrics within the published inter-quartile range; median difference %.1f%%, largest "
+                         "%.1f%%. Treat these numbers as one observation, not a benchmark result." % (
+                             mid, rep["replica"], m["within_published_iqr"], m["metrics"],
+                             m["median_abs_delta_pct"] or 0.0, m["max_abs_delta_pct"] or 0.0))
+                L.append("")
     L.append("Values are the median of the per-repetition tokens/s samples with the inter-quartile range in "
              "parentheses; `(n=1)` marks a single repetition; `n/a` means no completed run.")
     L.append("")
@@ -428,6 +453,24 @@ def render_markdown(summary):
             L.append("")
     else:
         L.append("_No context-length runs found._")
+        L.append("")
+
+    # --- reproducibility
+    if summary.get("reproducibility"):
+        L.append("## Reproducibility")
+        L.append("")
+        L.append("Each replica is a second run of the same pipeline, compared with `scripts/compare_runs.py`. "
+                 "Rule: a metric reproduces when the replica's median is within the published run's "
+                 "inter-quartile range. Full tables: `results/replicas/%s/<replica>/compare.md`." % summary["host_dir"])
+        L.append("")
+        L.append("| Replica | Model | Metrics compared | Reproduced | Median abs. difference | Largest abs. difference |")
+        L.append("|---|---|---|---|---|---|")
+        for rep in summary["reproducibility"]:
+            for mid, m in sorted(rep["by_model"].items()):
+                L.append("| `%s` | `%s` | %d | %d | %s | %s |" % (
+                    rep["replica"], mid, m["metrics"], m["within_published_iqr"],
+                    "%.1f%%" % m["median_abs_delta_pct"] if m["median_abs_delta_pct"] is not None else "n/a",
+                    "%.1f%%" % m["max_abs_delta_pct"] if m["max_abs_delta_pct"] is not None else "n/a"))
         L.append("")
 
     # --- llama.cpp vs MLX

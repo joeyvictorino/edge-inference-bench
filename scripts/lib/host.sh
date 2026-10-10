@@ -224,13 +224,13 @@ cpu_idle_pct() {
 # between samples. LAST_IDLE and QUIET_MET are read by the scripts that source
 # this file, so they are exported.
 #
-# On a GitHub runner (BENCH_HOST=gha-macos) the 3-vCPU virtual machine never
-# came close to 85% idle in the probe runs (0-73% idle; docs/notes.md). There the
-# wait is shortened (QUIET_TIMEOUT default 120) and, instead of refusing, the
-# function returns 0 with QUIET_MET=false; the scripts record that in every
-# conditions file and summarize.py reports how many runs started below the
-# threshold. On the operator's own machine nothing changes: a busy machine is
-# refused.
+# On a GitHub runner (BENCH_HOST=gha-macos) the 3-vCPU virtual machine was
+# 0-73% idle right after setup in the probe runs (docs/notes.md), and there is
+# no operator to close other work. There the wait is shortened (QUIET_TIMEOUT
+# default 120) and, instead of refusing, the function returns 0 with
+# QUIET_MET=false; the scripts record that in the conditions file and
+# summarize.py reports how many runs started below the threshold. On the
+# operator's own machine nothing changes: a busy machine is refused.
 export LAST_IDLE=0
 export QUIET_MET=false
 wait_for_quiet() {

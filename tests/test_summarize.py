@@ -150,6 +150,30 @@ class ConditionsTests(TempResults):
         self.assertIn("3 logical CPUs", md)
         self.assertIn("https://example/run/1", md)
 
+    def test_replica_comparison_is_rendered_with_a_warning(self):
+        sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
+        import compare_runs
+        host = os.path.join(self.results, "testhost")
+        rep = os.path.join(self.results, "replicas", "testhost", "run-1-replica2")
+        shutil.copytree(host, rep)
+        path = os.path.join(rep, "model-a", "sweep", "t4_b512_ub256_fa1_kvf16.json")
+        with open(path) as fh:
+            records = json.load(fh)
+        for r in records:
+            r["samples_ts"] = [x * 0.5 for x in r["samples_ts"]]
+        with open(path, "w") as fh:
+            json.dump(records, fh)
+        with open(os.path.join(rep, "compare.json"), "w") as fh:
+            json.dump(compare_runs.compare(host, rep), fh)
+        summary = summarize.summarize_host(host)
+        self.assertEqual([r["replica"] for r in summary["reproducibility"]], ["run-1-replica2"])
+        md = summarize.render_markdown(summary)
+        self.assertIn("Not reproduced (`model-a`)", md)
+        self.assertNotIn("Not reproduced (`model-b`)", md)
+        self.assertIn("## Reproducibility", md)
+        # the replica directory itself is never summarised as a host
+        self.assertFalse(summarize.is_host_dir(os.path.join(self.results, "replicas")))
+
     def test_sleep_and_timeout_are_excluded(self):
         self.set_env("t4_b512_ub256_fa1_kvf16", slept_during_run=True)
         self.set_env("t6_b1024_ub512_fa1_kvq8_0", timed_out=True)
