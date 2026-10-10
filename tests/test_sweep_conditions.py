@@ -227,5 +227,24 @@ class HostKind(unittest.TestCase):
         self.assertIn("unknown BENCH_HOST", r.stderr)
 
 
+class LlamaVersion(unittest.TestCase):
+    """Older llama-bench builds reject --version; the manifest must still carry a version."""
+
+    def test_falls_back_to_llama_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = os.path.join(tmp, "bin")
+            os.makedirs(bin_dir)
+            write_exe(os.path.join(bin_dir, "llama-bench"),
+                      "#!/usr/bin/env bash\necho 'usage: llama-bench [options]'\necho 'error: invalid parameter for argument: --version' >&2\nexit 1\n")
+            write_exe(os.path.join(bin_dir, "llama-cli"),
+                      "#!/usr/bin/env bash\necho 'version: 9999 (abc1234)'\necho 'built with stub for arm64'\n")
+            r = subprocess.run(["bash", "-c", "set -euo pipefail; source scripts/lib/host.sh; llama_cache_version; "
+                                "llama_version_string; llama_build_line"],
+                               cwd=ROOT, capture_output=True, text=True, timeout=60,
+                               env=dict(os.environ, PATH=bin_dir + os.pathsep + os.environ["PATH"]))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout.splitlines(), ["9999 (abc1234)", "built with stub for arm64"])
+
+
 if __name__ == "__main__":
     unittest.main()

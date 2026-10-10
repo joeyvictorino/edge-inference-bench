@@ -1,13 +1,16 @@
 # edge-inference-bench
 
 Reproducible latency and throughput numbers for small open-weight language
-models (1.5B to 4B parameters, 4-bit quantised) on one specific low-memory
-laptop-class machine, measured with llama.cpp and MLX.
+models (1.5B to 4B parameters, 4-bit quantised), measured with llama.cpp and
+MLX, each set tied to the one host that produced it. Two hosts are defined:
+the author's low-memory laptop-class machine (results pending; see
+"Measurement conditions") and a GitHub-hosted Apple-silicon runner, a virtual
+machine anyone can rerun from this repository (see "GitHub runner results").
 
 The intended use is as **priors for an agent harness**: when a tool-using
 agent loop runs a small local model, how long does a 2k-token prompt take to
 process, how many tokens per second come back, and how does that change as
-context grows? These numbers answer that for this machine only.
+context grows? Each results table answers that for its own host only.
 
 ## What is measured
 
@@ -31,9 +34,12 @@ attention off, or a prompt that does not fit in memory) are recorded as
 
 ### What is not claimed
 
-- **No cross-machine comparison.** One host, one llama.cpp build, one MLX
-  version. The numbers are not a ranking of chips, and the llama.cpp-vs-MLX
-  table is a same-machine, same-base-model comparison only.
+- **No cross-machine comparison.** Each host has its own table, llama.cpp
+  build and MLX version. The numbers are not a ranking of chips, and the
+  llama.cpp-vs-MLX table is a same-machine, same-base-model comparison only.
+- **The GitHub runner is not physical Apple silicon.** It is a virtual machine
+  with a paravirtual Metal GPU. Its numbers describe that runner class and
+  must not be read as the performance of an M1 or of any laptop.
 - **No multi-token prediction (MTP) or speculative decoding results.**
   Everything is plain autoregressive decoding.
 - **No fine-tuning, no quality evaluation.** Only throughput and latency are
@@ -44,8 +50,9 @@ attention off, or a prompt that does not fit in memory) are recorded as
 
 ## Hardware and software
 
-Recorded from the system on 2026-10-07 (see `docs/notes.md` for the exact
-commands):
+The author's machine, recorded from the system on 2026-10-07 (see
+`docs/notes.md` for the exact commands). No results from it are published
+yet:
 
 - Chip: Apple A18 Pro (`machdep.cpu.brand_string`), model identifier `Mac17,5`
 - Cores: 6 (2 performance, 4 efficiency)
@@ -91,6 +98,48 @@ throughput and competes with anything else using the GPU or memory bandwidth.
 <!-- RESULTS:BEGIN -->
 _Results pending._ No sweep has been run on this machine yet. This block is rewritten by `scripts/summarize.py` from the raw JSON under `results/`; it is never edited by hand.
 <!-- RESULTS:END -->
+
+## GitHub runner results
+
+Because the author's machine has not yet had a quiet, mains-powered window
+for the full sweep, the same scripts also run on a GitHub-hosted macOS runner
+through `.github/workflows/bench.yml`. Anyone with write access to a fork can
+rerun it (`gh workflow run bench.yml`), and every manifest records the
+runner image and the Actions run URL that produced it.
+
+What that runner is, as recorded by the probe and by every manifest
+(`runs-on: macos-15`): `sysctl` reports `Apple M1 (Virtual)`, model
+identifier `VirtualMac2,1`, 3 logical CPUs and 7 GiB of memory; macOS 15.7;
+llama.cpp from Homebrew; Metal reports `MTL0 (Apple Paravirtual device)`. It
+is a virtual machine on shared data-centre hardware.
+
+How the method is adapted, explicitly (`BENCH_HOST=gha-macos`, see
+`scripts/lib/host.sh`):
+
+- Results go under `results/gha-runner-<chip>-<mem>gb-macos<ver>/`, so they
+  can never be filed under the author's machine.
+- The power and sleep checks run unchanged. The guest OS reports
+  `AC Power`; that says nothing about the host's power, only that there is no
+  battery to throttle.
+- The runner never came close to the 85% idle threshold: idle samples on
+  the probe runners ranged from 0% to 73% (`docs/notes.md`). In this mode the scripts wait 30 seconds,
+  then run anyway and record `cpu_idle_before_pct` and
+  `quiet_threshold_met: false` in every conditions file. `summarize.py`
+  states how many runs started below the threshold. On the author's machine a
+  busy CPU is still refused.
+- The grid is reduced, because one full-grid configuration (prompts of 512,
+  2048 and 8192 tokens, 128 generated tokens, three repetitions) took 22 to 25
+  minutes on each of three probe runners, and the full grid has 96. Sweep: threads {2, 3}; batch/micro-batch 512:256, 512:512, 1024:512;
+  flash attention {off, on}; KV cache {f16, q8_0}; prompts of 512 and 2048
+  tokens; 128 generated tokens; 3 repetitions. Context length: 512 to 8192
+  tokens (no 16384), 64 generated tokens, 3 repetitions. MLX is not run. The
+  exact grid is in each `manifest.json`.
+- Each model runs twice, on two separate runners in the same workflow run.
+  The first is published; the second is kept under `results/replicas/` and
+  `scripts/compare_runs.py` checks it against the first with this
+  repository's reproducibility rule: a metric reproduces when the replica's
+  median is within the published run's inter-quartile range. The comparison
+  is committed beside the replica.
 
 ## Measurement conditions
 
@@ -158,10 +207,13 @@ rather than published; see `docs/notes.md`.
     scripts/context_length.sh throughput vs prompt length -> raw JSON per point
     scripts/mlx_bench.py     same prompt lengths through mlx_lm
     scripts/summarize.py     median/IQR tables, summary.{md,json}, README block
+    scripts/compare_runs.py  reproducibility check of a replica run against the published one
     scripts/regenerate.sh    whole pipeline for every model
     scripts/name-audit.sh    CI guard against names that must not appear here
     scripts/lib/             host fingerprint and models.yaml helpers
     results/<host>/<model>/  committed raw JSON (sweep/, context/, mlx/) and summaries
+    results/replicas/        second runs kept for the reproducibility check (not summarised)
+    .github/workflows/bench.yml  GitHub macOS runner benchmark (BENCH_HOST=gha-macos)
     tests/                   unit tests for summarize.py with a synthetic fixture
     docs/notes.md            environment observations and method notes
 

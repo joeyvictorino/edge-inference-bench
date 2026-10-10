@@ -98,3 +98,33 @@ quarantine directory and are not published, summarized or quoted. The scripts
 were then changed to refuse such conditions and to record them (see
 "Measurement conditions" in the README). The sweep has to be redone on mains
 power with nothing else running.
+
+## GitHub runner probe (2026-10-10)
+
+Runs https://github.com/joeyvictorino/edge-inference-bench/actions/runs/38033886530
+and https://github.com/joeyvictorino/edge-inference-bench/actions/runs/38035898494
+(temporary branches, since deleted) ran host commands and one llama-bench
+configuration on three GitHub-hosted arm64 macOS runners. Its throughput
+output was printed as a Markdown table, not saved as raw JSON, so no number
+from it is published; it was used only to learn the runner and to size the
+grid.
+
+| Item | `macos-15` | `macos-26` and `macos-latest` |
+|---|---|---|
+| Image | `macos-15-arm64` 20260907.0337.1 | `macos-26-arm64` |
+| `machdep.cpu.brand_string` | `Apple M1 (Virtual)` | `Apple M1 (Virtual)` |
+| `hw.model` / `hw.ncpu` / `hw.memsize` | `VirtualMac2,1` / 3 / 7516192768 | same |
+| macOS | 15.7.9 (24G830) | 26.6.2 |
+| `pmset -g batt` | `Now drawing from 'AC Power'`, no battery | same |
+| CPU idle samples (`top`, before the benchmark) | 38% and 2% | 28%, 57%, 58% and 5% |
+| CPU idle samples (`top`, after the benchmark) | 62% and 73% | 0%, 25%, 0% and 2% |
+| Metal device (llama.cpp) | `MTL0 (Apple Paravirtual device)`, `MTLGPUFamilyApple5` | same |
+| Metal capabilities (llama.cpp, `macos-15`) | simdgroup reduction `false`, simdgroup matrix multiply `false`, bfloat `false`, recommended working set 5010.80 MB | not checked |
+| llama.cpp (Homebrew) | formula 0.4.0, ggml 0.23.0; this `llama-bench` rejects `--version` | same |
+| Metal library compile per process | about 40 s | about 40 s |
+| One full-grid configuration (`-p 512,2048,8192 -n 128 -r 3`) | 22 min 18 s | 22 min 4 s and 24 min 56 s |
+
+Consequences, applied in `.github/workflows/bench.yml` and documented in the
+README: the idle threshold cannot be met on these runners, so runner mode
+records the level instead of refusing; and the grid is reduced so that one
+model fits in a job.

@@ -83,6 +83,7 @@ fi
 
 if [ "${SMOKE:-0}" = "1" ]; then HOST_DIR="results/smoke"; else HOST_DIR="results/$(host_slug)"; fi
 mkdir -p "$HOST_DIR"
+llama_cache_version
 echo "host: $(host_chip), $(host_mem_gb) GB, macOS $(host_macos); llama.cpp $(llama_version_string)"
 echo "results -> $HOST_DIR"
 

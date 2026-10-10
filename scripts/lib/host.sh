@@ -21,16 +21,36 @@ host_cores_perf() { sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || echo 0; }
 host_cores_eff() { sysctl -n hw.perflevel1.physicalcpu 2>/dev/null || echo 0; }
 host_model_id() { sysctl -n hw.model 2>/dev/null || echo unknown; }
 
+# The version output is captured once per process (call llama_cache_version
+# before using the readers below from subshells): each llama.cpp start compiles
+# the Metal library, which takes about 40 s on a GitHub runner. Older
+# llama-bench builds (Homebrew 0.4.0) reject --version; llama-cli from the
+# same installation reports the same build, so it is asked as a fallback.
+llama_cache_version() {
+  if [ -z "${_LLAMA_VERSION_OUT+x}" ]; then
+    _LLAMA_VERSION_OUT=$(llama-bench --version 2>&1 || true)
+    if ! grep -qE '^version:' <<<"$_LLAMA_VERSION_OUT" && command -v llama-cli >/dev/null 2>&1; then
+      _LLAMA_VERSION_OUT="$_LLAMA_VERSION_OUT
+$(llama-cli --version 2>&1 || true)"
+    fi
+  fi
+}
+_llama_version_out() { llama_cache_version; printf '%s\n' "$_LLAMA_VERSION_OUT"; }
 llama_version_string() {
-  # "version: 0.5.0 (build 11146, commit 7fe450e19)" style line from llama-bench
-  llama-bench --version 2>&1 | grep -E '^version:' | head -1 | sed 's/^version: //' || echo unknown
+  # "version: 0.5.0 (build 11146, commit 7fe450e19)" style line
+  _llama_version_out | grep -E '^version:' | head -1 | sed 's/^version: //' || echo unknown
 }
 llama_build_line() {
-  llama-bench --version 2>&1 | grep -E '^built with' | head -1 || echo unknown
+  _llama_version_out | grep -E '^built with' | head -1 || echo unknown
 }
 llama_metal_note() {
   # the tensor-API notice llama.cpp prints on this class of chip
-  llama-bench --version 2>&1 | grep -E 'ggml_metal_device_init' | head -1 || true
+  _llama_version_out | grep -E 'ggml_metal_device_init' | head -1 || true
+}
+# Homebrew formula versions, when llama.cpp came from Homebrew ("" otherwise).
+llama_brew_versions() {
+  command -v brew >/dev/null 2>&1 || return 0
+  brew list --versions llama.cpp ggml 2>/dev/null | tr '\n' ';' | sed 's/;$//' || true
 }
 
 # ---- host kind ---------------------------------------------------------------
@@ -94,6 +114,7 @@ PY
 }
 
 host_fingerprint_json() {
+  llama_cache_version
   jq -n \
     --arg chip "$(host_chip)" \
     --arg model_identifier "$(host_model_id)" \
@@ -106,6 +127,7 @@ host_fingerprint_json() {
     --arg llama_cpp_version "$(llama_version_string)" \
     --arg llama_cpp_built_with "$(llama_build_line)" \
     --arg metal_note "$(llama_metal_note)" \
+    --arg llama_cpp_homebrew "$(llama_brew_versions)" \
     --arg host_slug "$(host_slug)" \
     --arg host_kind "$(host_kind)" \
     --argjson runner "$(runner_json)" \
@@ -113,7 +135,7 @@ host_fingerprint_json() {
       cores_total:$cores_total, cores_performance:$cores_performance, cores_efficiency:$cores_efficiency,
       macos:$macos, macos_build:$macos_build,
       llama_cpp_version:$llama_cpp_version, llama_cpp_built_with:$llama_cpp_built_with,
-      metal_note:$metal_note, host_slug:$host_slug, host_kind:$host_kind, runner:$runner}'
+      metal_note:$metal_note, llama_cpp_homebrew:$llama_cpp_homebrew, host_slug:$host_slug, host_kind:$host_kind, runner:$runner}'
 }
 
 # write_manifest OUT_DIR MODEL_PATH KIND [extra_json]
@@ -192,8 +214,8 @@ cpu_idle_pct() {
 # between samples. LAST_IDLE and QUIET_MET are read by the scripts that source
 # this file, so they are exported.
 #
-# On a GitHub runner (BENCH_HOST=gha-macos) the runner's own agent keeps a
-# 3-vCPU virtual machine 30-60% busy, so 85% idle is never reached. There the
+# On a GitHub runner (BENCH_HOST=gha-macos) the 3-vCPU virtual machine never
+# came close to 85% idle in the probe runs (0-73% idle; docs/notes.md). There the
 # wait is shortened (QUIET_TIMEOUT default 120) and, instead of refusing, the
 # function returns 0 with QUIET_MET=false; the scripts record that in every
 # conditions file and summarize.py reports how many runs started below the

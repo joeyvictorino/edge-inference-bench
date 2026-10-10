@@ -9,7 +9,7 @@ name: bench
 # such (scripts/lib/host.sh): results land under
 # results/gha-runner-<chip>-<mem>gb-macos<ver>/ and every manifest records the
 # runner image and this run's URL. The grid is reduced (see README, "GitHub
-# runner results") because one full-grid configuration takes about 17 minutes
+# runner results") because one full-grid configuration takes 22 to 25 minutes
 # on this runner. Each model runs twice on separate runners ("replica") so the
 # repository's reproducibility check can be applied to the published medians.
 
@@ -57,8 +57,7 @@ jobs:
       - name: Install llama.cpp (Homebrew)
         run: |
           brew install llama.cpp
-          brew info --json=v2 llama.cpp | jq -r '.formulae[0] | "llama.cpp formula \(.versions.stable) revision \(.revision)"'
-          llama-bench --version 2>&1 | grep -E '^(version|built with)'
+          brew list --versions llama.cpp ggml
 
       - name: Host facts
         run: |
