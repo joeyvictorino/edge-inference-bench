@@ -105,6 +105,7 @@ def load_sweep(d):
     failed = sorted(os.path.basename(p)[: -len(".failed.json")] for p in glob.glob(os.path.join(d, "*.failed.json")))
     interrupted = sorted(os.path.basename(p)[: -len(".interrupted.json")] for p in glob.glob(os.path.join(d, "*.interrupted.json")))
     excluded = {}
+    below_idle = []
     for path in sorted(glob.glob(os.path.join(d, "*.json"))):
         base = os.path.basename(path)
         if base == "manifest.json" or base.endswith((".failed.json", ".interrupted.json", ".env.json")):
@@ -124,11 +125,24 @@ def load_sweep(d):
         records = load_json(path)
         if not isinstance(records, list) or not records:
             continue
+        if not idle_threshold_met(os.path.join(d, name + ".env.json")):
+            below_idle.append(name)
         configs[name] = {"config": cfg, "tests": llama_tests(records),
                          "model_type": records[0].get("model_type", ""),
                          "model_size": records[0].get("model_size")}
     return {"manifest": manifest, "configs": configs, "failed": failed,
-            "interrupted": interrupted, "excluded": excluded}
+            "interrupted": interrupted, "excluded": excluded, "below_idle": below_idle}
+
+
+def idle_threshold_met(env_path):
+    """False only when a conditions record says the run started below the idle
+    threshold. That can only happen on a GitHub runner (BENCH_HOST=gha-macos);
+    on the operator's machine such a run is refused before it starts. Records
+    from before the field existed count as met, as they were refused otherwise."""
+    if not os.path.exists(env_path):
+        return True
+    env = load_json(env_path)
+    return not (isinstance(env, dict) and env.get("quiet_threshold_met") is False)
 
 
 def uncontrolled_reason(env_path):
@@ -170,7 +184,9 @@ def load_context(d):
     excluded_stage = uncontrolled_reason(os.path.join(d, "stage-conditions.json")) if points else ""
     if excluded_stage:
         points = {}
-    return {"manifest": manifest, "points": points, "failed": failed, "excluded_stage": excluded_stage}
+    below_idle = bool(points) and not idle_threshold_met(os.path.join(d, "stage-conditions.json"))
+    return {"manifest": manifest, "points": points, "failed": failed, "excluded_stage": excluded_stage,
+            "below_idle_threshold": below_idle}
 
 
 def load_mlx(d):
@@ -196,7 +212,9 @@ def load_mlx(d):
     excluded_stage = uncontrolled_reason(os.path.join(d, "stage-conditions.json")) if points else ""
     if excluded_stage:
         points = {}
-    return {"manifest": manifest, "points": points, "failed": failed, "excluded_stage": excluded_stage}
+    below_idle = bool(points) and not idle_threshold_met(os.path.join(d, "stage-conditions.json"))
+    return {"manifest": manifest, "points": points, "failed": failed, "excluded_stage": excluded_stage,
+            "below_idle_threshold": below_idle}
 
 
 def load_host(host_dir):
@@ -277,6 +295,7 @@ def summarize_host(host_dir):
                 "n_configs_interrupted": len(sw["interrupted"]),
                 "n_configs_excluded_conditions": len(sw["excluded"]),
                 "excluded_conditions": sw["excluded"],
+                "n_configs_below_idle_threshold": len(sw["below_idle"]),
                 "llama_cpp_version": (sw["manifest"].get("host") or {}).get("llama_cpp_version"),
                 "model_sha256": sw["manifest"].get("model_sha256"),
                 "best": None,
@@ -290,10 +309,12 @@ def summarize_host(host_dir):
         if "context" in entry:
             cx = entry["context"]
             m["context"] = {"failed": cx["failed"], "excluded_stage": cx["excluded_stage"],
+                            "below_idle_threshold": cx["below_idle_threshold"],
                             "points": {str(k): v for k, v in sorted(cx["points"].items())}}
         if "mlx" in entry:
             ml = entry["mlx"]
             m["mlx"] = {"failed": ml["failed"], "excluded_stage": ml["excluded_stage"],
+                        "below_idle_threshold": ml["below_idle_threshold"],
                         "model_repo": ml["manifest"].get("model_repo"),
                         "engine_versions": ml["manifest"].get("engine_versions"),
                         "points": {str(k): v for k, v in sorted(ml["points"].items())}}
@@ -312,11 +333,25 @@ def render_markdown(summary):
                  "one repetition). They prove the pipeline works and are not benchmark results.")
         L.append("")
     if h:
-        L.append("Host: %s, %d GB unified memory, %d cores (%d performance + %d efficiency), macOS %s (%s). "
+        runner = h.get("runner") or {}
+        if h.get("host_kind") == "gha-macos":
+            L.append("> **GitHub-hosted runner, not a physical machine.** These numbers come from a virtual "
+                     "machine (`runs-on: %s`, image %s %s) on shared data-centre hardware. They describe that "
+                     "runner class, not any laptop, and are not comparable with the other hosts in this "
+                     "repository." % (runner.get("runs_on", "?"), runner.get("image_os", "?"),
+                                      runner.get("image_version", "?")))
+            L.append("")
+        if h.get("cores_performance", 0) or h.get("cores_efficiency", 0):
+            cores = "%d cores (%d performance + %d efficiency)" % (
+                h.get("cores_total", 0), h.get("cores_performance", 0), h.get("cores_efficiency", 0))
+        else:
+            cores = "%d logical CPUs" % h.get("cores_total", 0)
+        L.append("Host: %s, %d GB memory, %s, macOS %s (%s). "
                  "llama.cpp %s." % (h.get("chip", "?"), int(h.get("memory_bytes", 0)) // 2 ** 30,
-                                    h.get("cores_total", 0), h.get("cores_performance", 0),
-                                    h.get("cores_efficiency", 0), h.get("macos", "?"), h.get("macos_build", "?"),
+                                    cores, h.get("macos", "?"), h.get("macos_build", "?"),
                                     h.get("llama_cpp_version", "?")))
+        if runner.get("run_url"):
+            L.append("Produced by GitHub Actions run %s." % runner["run_url"])
         if h.get("metal_note"):
             L.append("Metal note recorded by llama.cpp: `%s`." % h["metal_note"])
         ts = summary["data_timestamps"]
@@ -351,6 +386,15 @@ def render_markdown(summary):
         row.append("%d/%d/%d" % (sw["n_configs_ok"], sw["n_configs_failed"], sw["n_configs_excluded_conditions"]))
         L.append("| " + " | ".join(row) + " |")
     L.append("")
+    busy = [(mid, m["sweep"]["n_configs_below_idle_threshold"], m["sweep"]["n_configs_ok"])
+            for mid, m in summary["models"].items() if (m.get("sweep") or {}).get("n_configs_below_idle_threshold")]
+    busy_ctx = [mid for mid, m in summary["models"].items() if (m.get("context") or {}).get("below_idle_threshold")]
+    if busy or busy_ctx:
+        parts = ["`%s`: %d of %d sweep configurations" % (mid, n, ok) for mid, n, ok in busy]
+        parts += ["`%s`: the context-length stage" % mid for mid in busy_ctx]
+        L.append("Started below the CPU-idle threshold (recorded, not refused, on a GitHub runner; the "
+                 "`cpu_idle_before_pct` in each conditions file gives the level): " + "; ".join(parts) + ".")
+        L.append("")
 
     # --- throughput vs context
     L.append("## Throughput versus prompt length (llama.cpp)")

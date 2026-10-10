@@ -39,7 +39,7 @@ run_stage() {
     echo "machine not idle (CPU ${LAST_IDLE}% idle, need ${QUIET_IDLE_MIN:-85}%); not running $dir. Close other applications and run again." >&2
     return 3
   fi
-  local sig_before sig_after pb sb pa sa slept=false rc=0
+  local sig_before sig_after pb sb pa sa slept=false rc=0 idle_before="$LAST_IDLE" quiet_met="$QUIET_MET"
   sig_before=$(find "$dir" -maxdepth 1 -type f ! -name stage-conditions.json -exec basename {} \; | sort | shasum | cut -d' ' -f1)
   pb=$(power_json); sb=$(sleep_stamp)
   "$@" || rc=$?
@@ -54,10 +54,26 @@ run_stage() {
     fi
     if [ "$prev_dirty" = false ]; then
       jq -n --argjson before "$pb" --argjson after "$pa" --argjson slept "$slept" \
-        '{power_before:$before, power_after:$after, slept_during_run:$slept, timed_out:false}' > "$rec"
+        --argjson idle "$idle_before" --argjson quiet_met "$quiet_met" --argjson quiet_min "${QUIET_IDLE_MIN:-85}" \
+        '{power_before:$before, power_after:$after, slept_during_run:$slept, timed_out:false,
+          cpu_idle_before_pct:$idle, quiet_threshold_pct:$quiet_min, quiet_threshold_met:$quiet_met}' > "$rec"
     fi
   fi
   return $rc
+}
+
+# Per-stage grid overrides. sweep.sh and context_length.sh read the same
+# variable names (and PROMPTS has a different format in each), so one
+# invocation cannot give them different grids through THREADS or PROMPTS.
+# SWEEP_<VAR> and CONTEXT_<VAR> are passed to that stage only, as <VAR>.
+# Unset means the stage's own default; every grid lands in its manifest.
+stage_env() {
+  local prefix="$1" v name
+  STAGE_ENV=()
+  for v in THREADS BATCHES FA KV PROMPTS GEN REPS; do
+    name="${prefix}_${v}"
+    if [ -n "${!name:-}" ]; then STAGE_ENV+=("$v=${!name}"); fi
+  done
 }
 
 if [ "$#" -gt 0 ]; then IDS=("$@"); else
@@ -75,8 +91,10 @@ for id in "${IDS[@]}"; do
   mlx=$(python3 scripts/lib/modelsyaml.py get "$id" mlx_equivalent)
   echo "=== $id"
   scripts/fetch.sh "$id"
-  scripts/sweep.sh "models/$file" "$HOST_DIR/$id/sweep"
-  run_stage "$HOST_DIR/$id/context" scripts/context_length.sh "models/$file" "$HOST_DIR/$id/context"
+  stage_env SWEEP
+  env ${STAGE_ENV[@]+"${STAGE_ENV[@]}"} scripts/sweep.sh "models/$file" "$HOST_DIR/$id/sweep"
+  stage_env CONTEXT
+  run_stage "$HOST_DIR/$id/context" env ${STAGE_ENV[@]+"${STAGE_ENV[@]}"} scripts/context_length.sh "models/$file" "$HOST_DIR/$id/context"
   if [ -n "$mlx" ] && [ "${SKIP_MLX:-0}" != "1" ]; then
     if [ -x .venv/bin/python ]; then
       run_stage "$HOST_DIR/$id/mlx" .venv/bin/python scripts/mlx_bench.py --model "$mlx" --out "$HOST_DIR/$id/mlx" \
@@ -90,5 +108,7 @@ done
 if [ "${SMOKE:-0}" = "1" ]; then
   python3 scripts/summarize.py "$HOST_DIR" --no-readme
 else
-  python3 scripts/summarize.py "$HOST_DIR"
+  # Summarise every host under results/ so the README block keeps the other
+  # hosts' tables when this one is regenerated.
+  python3 scripts/summarize.py results
 fi

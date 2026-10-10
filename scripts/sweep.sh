@@ -99,7 +99,7 @@ for t in $THREADS; do
           echo "  machine not idle (CPU ${LAST_IDLE}% idle, need ${QUIET_IDLE_MIN:-85}%); skipped $name, it will be retried"
           continue
         fi
-        idle_before=$LAST_IDLE
+        idle_before=$LAST_IDLE; quiet_met=$QUIET_MET
         power_before=$(power_json); sleep_before=$(sleep_stamp); started=$(date +%s)
         set +e
         llama-bench -m "$MODEL" -t "$t" -b "$b" -ub "$ub" -fa "$fa" \
@@ -126,8 +126,10 @@ for t in $THREADS; do
         jq -n --argjson before "$power_before" --argjson after "$power_after" \
           --argjson slept "$slept" --argjson timed_out "$timed_out" \
           --argjson seconds "$((ended - started))" --argjson idle "$idle_before" \
+          --argjson quiet_met "$quiet_met" --argjson quiet_min "${QUIET_IDLE_MIN:-85}" \
           '{power_before:$before, power_after:$after, slept_during_run:$slept,
-            timed_out:$timed_out, wall_seconds:$seconds, cpu_idle_before_pct:$idle}' > "$OUT/$name.env.json"
+            timed_out:$timed_out, wall_seconds:$seconds, cpu_idle_before_pct:$idle,
+            quiet_threshold_pct:$quiet_min, quiet_threshold_met:$quiet_met}' > "$OUT/$name.env.json"
         if [ "$slept" = true ]; then
           # The machine slept while this ran, so its timings include the sleep.
           # Keep the raw output for diagnosis but never count it; the next run retries it.

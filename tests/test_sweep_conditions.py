@@ -129,6 +129,28 @@ class SweepConditions(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.env_of("t4_b512_ub256_fa1_kvf16")["cpu_idle_before_pct"], 93.5)
 
+    def test_busy_local_machine_is_still_refused_with_runner_mode_unset(self):
+        r = self.run_sweep(ASSAY_CPU_IDLE_CMD="echo 40", QUIET_TIMEOUT="1", QUIET_POLL="1")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+
+    def test_busy_github_runner_runs_and_records_the_threshold_miss(self):
+        r = self.run_sweep(ASSAY_CPU_IDLE_CMD="echo 41.5", QUIET_TIMEOUT="1", QUIET_POLL="1", BENCH_HOST="gha-macos")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("never reached 85% idle", r.stdout)
+        env = self.env_of("t4_b512_ub256_fa1_kvf16")
+        self.assertEqual(env["cpu_idle_before_pct"], 41.5)
+        self.assertFalse(env["quiet_threshold_met"])
+        self.assertEqual(env["quiet_threshold_pct"], 85)
+        with open(os.path.join(self.out, "manifest.json")) as f:
+            man = json.load(f)
+        self.assertEqual(man["host"]["host_kind"], "gha-macos")
+        self.assertTrue(man["host"]["runner"]["virtualized"])
+
+    def test_quiet_run_records_threshold_met(self):
+        r = self.run_sweep()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(self.env_of("t4_b512_ub256_fa1_kvf16")["quiet_threshold_met"])
+
     def test_machine_that_quiets_down_is_waited_for(self):
         # busy on the first sample, quiet on the second
         flip = os.path.join(self.tmp, "flip.sh")
@@ -167,6 +189,42 @@ class PowerHelpers(unittest.TestCase):
                                cwd=ROOT, capture_output=True, text=True, timeout=60,
                                env=dict(os.environ, PATH=bin_dir + os.pathsep + os.environ["PATH"]))
             self.assertEqual(r.stdout.split(), ["Battery", "5"], r.stdout + r.stderr)
+
+
+class HostKind(unittest.TestCase):
+    """A GitHub runner must never be filed under the operator's own host."""
+
+    def sh(self, script, **env):
+        e = dict(os.environ)
+        e.pop("BENCH_HOST", None)
+        e.update(env)
+        return subprocess.run(["bash", "-c", "set -euo pipefail; source scripts/lib/host.sh; " + script],
+                              cwd=ROOT, capture_output=True, text=True, timeout=60, env=e)
+
+    def test_default_is_local_with_no_runner_record(self):
+        r = self.sh("host_kind; runner_json; host_slug")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        kind, runner, slug = r.stdout.split()
+        self.assertEqual(kind, "local")
+        self.assertEqual(runner, "null")
+        self.assertFalse(slug.startswith("gha-runner-"), slug)
+
+    def test_gha_runner_is_prefixed_and_records_the_run(self):
+        r = self.sh("host_slug; runner_json", BENCH_HOST="gha-macos", GITHUB_RUN_ID="42",
+                    GITHUB_REPOSITORY="o/r", GITHUB_SERVER_URL="https://github.com", ImageOS="macos15",
+                    ImageVersion="20261001.1", RUNNER_ARCH="ARM64", BENCH_RUNNER_LABEL="macos-15")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        slug, rest = r.stdout.split("\n", 1)
+        self.assertTrue(slug.startswith("gha-runner-"), slug)
+        runner = json.loads(rest)
+        self.assertTrue(runner["virtualized"])
+        self.assertEqual(runner["run_url"], "https://github.com/o/r/actions/runs/42/attempts/1")
+        self.assertEqual(runner["runs_on"], "macos-15")
+
+    def test_unknown_host_kind_is_refused(self):
+        r = self.sh("host_slug", BENCH_HOST="laptop")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("unknown BENCH_HOST", r.stderr)
 
 
 if __name__ == "__main__":

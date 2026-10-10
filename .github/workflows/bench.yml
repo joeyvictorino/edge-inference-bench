@@ -1,0 +1,83 @@
+name: bench
+
+# Runs the benchmark pipeline on GitHub-hosted Apple-silicon macOS runners and
+# uploads the raw results as artifacts. Nothing is committed by the workflow:
+# the operator downloads the artifacts, reviews them and commits them.
+#
+# The runner is a virtual machine ("Apple M1 (Virtual)", 3 vCPUs, 7 GB, a
+# paravirtual Metal GPU) on shared data-centre hardware. BENCH_HOST marks it as
+# such (scripts/lib/host.sh): results land under
+# results/gha-runner-<chip>-<mem>gb-macos<ver>/ and every manifest records the
+# runner image and this run's URL. The grid is reduced (see README, "GitHub
+# runner results") because one full-grid configuration takes about 17 minutes
+# on this runner. Each model runs twice on separate runners ("replica") so the
+# repository's reproducibility check can be applied to the published medians.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs_on:
+        description: "Runner label (an arm64 macOS image)"
+        default: "macos-15"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [qwen2.5-1.5b-instruct-q4_k_m, qwen2.5-3b-instruct-q4_k_m]
+        replica: [1, 2]
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 345
+    env:
+      BENCH_HOST: gha-macos
+      BENCH_RUNNER_LABEL: ${{ inputs.runs_on }}
+      SKIP_MLX: "1"
+      # The runner never reaches 85% idle; record the level, do not wait long.
+      QUIET_TIMEOUT: "30"
+      QUIET_POLL: "10"
+      # Reduced grid (README, "GitHub runner results").
+      SWEEP_THREADS: "2 3"
+      SWEEP_BATCHES: "512:256 512:512 1024:512"
+      SWEEP_FA: "off on"
+      SWEEP_KV: "f16 q8_0"
+      SWEEP_PROMPTS: "512,2048"
+      SWEEP_GEN: "128"
+      SWEEP_REPS: "3"
+      CONTEXT_PROMPTS: "512 1024 2048 4096 8192"
+      CONTEXT_GEN: "64"
+      CONTEXT_REPS: "3"
+      MODEL_ID: ${{ matrix.model }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install llama.cpp (Homebrew)
+        run: |
+          brew install llama.cpp
+          brew info --json=v2 llama.cpp | jq -r '.formulae[0] | "llama.cpp formula \(.versions.stable) revision \(.revision)"'
+          llama-bench --version 2>&1 | grep -E '^(version|built with)'
+
+      - name: Host facts
+        run: |
+          echo "ImageOS=$ImageOS ImageVersion=$ImageVersion RUNNER_ARCH=$RUNNER_ARCH"
+          sysctl -n machdep.cpu.brand_string hw.model hw.memsize hw.ncpu
+          sw_vers
+          pmset -g batt || true
+          top -l 2 -n 0 -s 2 | grep 'CPU usage' | tail -1
+
+      - name: Benchmark
+        run: scripts/regenerate.sh "$MODEL_ID"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.model }}-replica${{ matrix.replica }}-${{ github.run_id }}
+          path: |
+            results/gha-runner-*/
+            models.lock
+          if-no-files-found: error
+          retention-days: 90

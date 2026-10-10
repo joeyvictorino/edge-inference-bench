@@ -123,6 +123,33 @@ class ConditionsTests(TempResults):
         self.set_env("t6_b1024_ub512_fa1_kvq8_0", power_after={"source": "Battery", "battery_pct": 90})
         self.assertEqual(self.load()["configs"], {})
 
+    def test_below_idle_threshold_is_published_but_counted(self):
+        self.set_env("t4_b512_ub256_fa1_kvf16", quiet_threshold_met=False, cpu_idle_before_pct=55.0)
+        sw = self.load()
+        self.assertIn("t4_b512_ub256_fa1_kvf16", sw["configs"])
+        self.assertEqual(sw["below_idle"], ["t4_b512_ub256_fa1_kvf16"])
+        summary = summarize.summarize_host(os.path.join(self.results, "testhost"))
+        self.assertEqual(summary["models"]["model-a"]["sweep"]["n_configs_below_idle_threshold"], 1)
+        md = summarize.render_markdown(summary)
+        self.assertIn("Started below the CPU-idle threshold", md)
+        self.assertIn("`model-a`: 1 of 2 sweep configurations", md)
+
+    def test_runner_host_is_labelled(self):
+        man_path = os.path.join(self.sweep_dir(), "manifest.json")
+        with open(man_path) as fh:
+            man = json.load(fh)
+        man.setdefault("host", {}).update({"host_kind": "gha-macos", "cores_performance": 0, "cores_efficiency": 0,
+                                           "cores_total": 3,
+                                           "runner": {"virtualized": True, "runs_on": "macos-15", "image_os": "macos15",
+                                                      "image_version": "1", "run_url": "https://example/run/1"}})
+        with open(man_path, "w") as fh:
+            json.dump(man, fh)
+        summary = summarize.summarize_host(os.path.join(self.results, "testhost"))
+        md = summarize.render_markdown(summary)
+        self.assertIn("GitHub-hosted runner, not a physical machine", md)
+        self.assertIn("3 logical CPUs", md)
+        self.assertIn("https://example/run/1", md)
+
     def test_sleep_and_timeout_are_excluded(self):
         self.set_env("t4_b512_ub256_fa1_kvf16", slept_during_run=True)
         self.set_env("t6_b1024_ub512_fa1_kvq8_0", timed_out=True)

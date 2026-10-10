@@ -33,12 +33,44 @@ llama_metal_note() {
   llama-bench --version 2>&1 | grep -E 'ggml_metal_device_init' | head -1 || true
 }
 
+# ---- host kind ---------------------------------------------------------------
+# BENCH_HOST says what kind of machine this is. Unset (the default) means the
+# operator's own Mac, and every measurement-condition check below applies
+# unchanged. BENCH_HOST=gha-macos marks a GitHub-hosted macOS runner: a virtual
+# machine on a data-centre Mac, shared hardware, no battery. Results from it go
+# under a host directory starting with "gha-runner-" and their manifests carry
+# the runner image and the Actions run URL, so they can never be mistaken for
+# the operator's machine. Any other value is refused.
+host_kind() {
+  case "${BENCH_HOST:-}" in
+    "") echo local ;;
+    gha-macos) echo gha-macos ;;
+    *) echo "unknown BENCH_HOST '${BENCH_HOST}' (expected unset or gha-macos)" >&2; return 2 ;;
+  esac
+}
+is_gha_host() { [ "$(host_kind)" = "gha-macos" ]; }
+
 host_slug() {
-  local chip mem os
+  local chip mem os prefix=""
+  host_kind >/dev/null || return 2
   chip=$(host_chip | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
   mem=$(host_mem_gb)
   os=$(host_macos)
-  echo "${chip}-${mem}gb-macos${os}"
+  if is_gha_host; then prefix="gha-runner-"; fi
+  echo "${prefix}${chip}-${mem}gb-macos${os}"
+}
+
+# runner_json -> GitHub runner facts in gha-macos mode, null otherwise.
+runner_json() {
+  if ! is_gha_host; then echo null; return 0; fi
+  local url=""
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT:-1}"
+  fi
+  jq -n --arg image_os "${ImageOS:-unknown}" --arg image_version "${ImageVersion:-unknown}" \
+    --arg arch "${RUNNER_ARCH:-unknown}" --arg label "${BENCH_RUNNER_LABEL:-unknown}" --arg run_url "$url" \
+    '{virtualized:true, image_os:$image_os, image_version:$image_version, runner_arch:$arch,
+      runs_on:$label, run_url:$run_url}'
 }
 
 model_sha256() {
@@ -75,11 +107,13 @@ host_fingerprint_json() {
     --arg llama_cpp_built_with "$(llama_build_line)" \
     --arg metal_note "$(llama_metal_note)" \
     --arg host_slug "$(host_slug)" \
+    --arg host_kind "$(host_kind)" \
+    --argjson runner "$(runner_json)" \
     '{chip:$chip, model_identifier:$model_identifier, memory_bytes:$memory_bytes,
       cores_total:$cores_total, cores_performance:$cores_performance, cores_efficiency:$cores_efficiency,
       macos:$macos, macos_build:$macos_build,
       llama_cpp_version:$llama_cpp_version, llama_cpp_built_with:$llama_cpp_built_with,
-      metal_note:$metal_note, host_slug:$host_slug}'
+      metal_note:$metal_note, host_slug:$host_slug, host_kind:$host_kind, runner:$runner}'
 }
 
 # write_manifest OUT_DIR MODEL_PATH KIND [extra_json]
@@ -152,18 +186,36 @@ cpu_idle_pct() {
 }
 
 # wait_for_quiet: poll until the machine is idle enough to benchmark. Sets
-# LAST_IDLE to the last sample. Returns 1 if it is still busy after
-# QUIET_TIMEOUT seconds (default 900). QUIET_IDLE_MIN (default 85) is the
-# required idle percentage; QUIET_POLL (default 15) the gap between samples.
-# LAST_IDLE is read by the scripts that source this file, so it is exported.
+# LAST_IDLE to the last sample and QUIET_MET to true or false. Returns 1 if it
+# is still busy after QUIET_TIMEOUT seconds (default 900). QUIET_IDLE_MIN
+# (default 85) is the required idle percentage; QUIET_POLL (default 15) the gap
+# between samples. LAST_IDLE and QUIET_MET are read by the scripts that source
+# this file, so they are exported.
+#
+# On a GitHub runner (BENCH_HOST=gha-macos) the runner's own agent keeps a
+# 3-vCPU virtual machine 30-60% busy, so 85% idle is never reached. There the
+# wait is shortened (QUIET_TIMEOUT default 120) and, instead of refusing, the
+# function returns 0 with QUIET_MET=false; the scripts record that in every
+# conditions file and summarize.py reports how many runs started below the
+# threshold. On the operator's own machine nothing changes: a busy machine is
+# refused.
 export LAST_IDLE=0
+export QUIET_MET=false
 wait_for_quiet() {
-  local min="${QUIET_IDLE_MIN:-85}" limit="${QUIET_TIMEOUT:-900}" poll="${QUIET_POLL:-15}" waited=0 idle
+  local min="${QUIET_IDLE_MIN:-85}" limit="${QUIET_TIMEOUT:-900}" poll="${QUIET_POLL:-15}" waited=0 idle gha=false
+  if is_gha_host; then gha=true; limit="${QUIET_TIMEOUT:-120}"; fi
   while :; do
     idle=$(cpu_idle_pct); idle=${idle:-0}
     export LAST_IDLE="$idle"
-    if awk -v i="$idle" -v m="$min" 'BEGIN{exit !(i>=m)}'; then return 0; fi
-    [ "$waited" -ge "$limit" ] && return 1
+    if awk -v i="$idle" -v m="$min" 'BEGIN{exit !(i>=m)}'; then export QUIET_MET=true; return 0; fi
+    if [ "$waited" -ge "$limit" ]; then
+      export QUIET_MET=false
+      if [ "$gha" = true ]; then
+        echo "  runner never reached ${min}% idle (last ${idle}%); recording that and running (BENCH_HOST=gha-macos)"
+        return 0
+      fi
+      return 1
+    fi
     sleep "$poll"; waited=$((waited + poll))
   done
 }
