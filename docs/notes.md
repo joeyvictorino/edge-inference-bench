@@ -114,6 +114,8 @@ grid.
 | Image | `macos-15-arm64` 20260907.0337.1 | `macos-26-arm64` |
 | `machdep.cpu.brand_string` | `Apple M1 (Virtual)` | `Apple M1 (Virtual)` |
 | `hw.model` / `hw.ncpu` / `hw.memsize` | `VirtualMac2,1` / 3 / 7516192768 | same |
+| `hw.perflevel0.physicalcpu` / `hw.perflevel1.physicalcpu` | 3 / key absent (prints nothing) | not checked |
+| `kern.sleeptime` | `{ sec = 0, usec = 0 } Thu Jan  1 00:00:00 1970` | not checked |
 | macOS | 15.7.9 (24G830) | 26.6.2 |
 | `pmset -g batt` | `Now drawing from 'AC Power'`, no battery | same |
 | CPU idle samples (`top`, before the benchmark) | 38% and 2% | 28%, 57%, 58% and 5% |

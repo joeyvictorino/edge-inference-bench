@@ -11,14 +11,21 @@ _repo_root() {
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd
 }
 
+# _sysctl_int NAME -> the integer value, or 0 when the key is missing or empty
+# (a GitHub runner VM has no hw.perflevel* keys; the value feeds jq --argjson).
+_sysctl_int() {
+  local v
+  v=$(sysctl -n "$1" 2>/dev/null) || v=""
+  case "$v" in ''|*[!0-9]*) echo 0 ;; *) echo "$v" ;; esac
+}
 host_chip() { sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown; }
-host_mem_bytes() { sysctl -n hw.memsize 2>/dev/null || echo 0; }
+host_mem_bytes() { _sysctl_int hw.memsize; }
 host_mem_gb() { echo $(( $(host_mem_bytes) / 1024 / 1024 / 1024 )); }
 host_macos() { sw_vers -productVersion 2>/dev/null || echo unknown; }
 host_macos_build() { sw_vers -buildVersion 2>/dev/null || echo unknown; }
-host_cores_total() { sysctl -n hw.ncpu 2>/dev/null || echo 0; }
-host_cores_perf() { sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || echo 0; }
-host_cores_eff() { sysctl -n hw.perflevel1.physicalcpu 2>/dev/null || echo 0; }
+host_cores_total() { _sysctl_int hw.ncpu; }
+host_cores_perf() { _sysctl_int hw.perflevel0.physicalcpu; }
+host_cores_eff() { _sysctl_int hw.perflevel1.physicalcpu; }
 host_model_id() { sysctl -n hw.model 2>/dev/null || echo unknown; }
 
 # The version output is captured once per process (call llama_cache_version
@@ -73,7 +80,7 @@ is_gha_host() { [ "$(host_kind)" = "gha-macos" ]; }
 host_slug() {
   local chip mem os prefix=""
   host_kind >/dev/null || return 2
-  chip=$(host_chip | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
+  chip=$(host_chip | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-' | tr -s '-' | sed 's/^-//; s/-$//')
   mem=$(host_mem_gb)
   os=$(host_macos)
   if is_gha_host; then prefix="gha-runner-"; fi
@@ -195,7 +202,10 @@ require_ac_power() {
 
 # power_json -> {"source":"AC|Battery","battery_pct":N}
 power_json() {
-  jq -n --arg source "$(power_source)" --argjson pct "$(battery_pct || echo null)" \
+  local pct
+  pct=$(battery_pct || true)
+  [ -n "$pct" ] || pct=null   # no battery line (desktop Mac or virtual machine)
+  jq -n --arg source "$(power_source)" --argjson pct "$pct" \
     '{source:$source, battery_pct:$pct}'
 }
 

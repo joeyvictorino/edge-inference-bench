@@ -191,6 +191,28 @@ class PowerHelpers(unittest.TestCase):
             self.assertEqual(r.stdout.split(), ["Battery", "5"], r.stdout + r.stderr)
 
 
+class VirtualMachineHost(unittest.TestCase):
+    """A runner VM has no battery line and no efficiency-core sysctl keys; the
+    JSON writers must still produce valid records (an earlier version passed
+    an empty string to jq --argjson and stopped the run)."""
+
+    def test_power_json_without_a_battery_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = os.path.join(tmp, "bin")
+            os.makedirs(bin_dir)
+            write_exe(os.path.join(bin_dir, "pmset"), "#!/usr/bin/env bash\necho \"Now drawing from 'AC Power'\"\n")
+            write_exe(os.path.join(bin_dir, "sysctl"),
+                      "#!/usr/bin/env bash\n[ \"$1\" = -n ] && shift\ncase \"$1\" in hw.perflevel1.physicalcpu) ;; "
+                      "hw.perflevel0.physicalcpu|hw.ncpu) echo 3;; *) /usr/sbin/sysctl -n \"$1\";; esac\n")
+            r = subprocess.run(["bash", "-c", "set -euo pipefail; source scripts/lib/host.sh; power_json; "
+                                "host_cores_eff; host_cores_perf"],
+                               cwd=ROOT, capture_output=True, text=True, timeout=60,
+                               env=dict(os.environ, PATH=bin_dir + os.pathsep + os.environ["PATH"]))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = r.stdout.rsplit("}", 1)
+            self.assertEqual(json.loads(out[0] + "}"), {"source": "AC", "battery_pct": None})
+            self.assertEqual(out[1].split(), ["0", "3"])
+
 class HostKind(unittest.TestCase):
     """A GitHub runner must never be filed under the operator's own host."""
 
