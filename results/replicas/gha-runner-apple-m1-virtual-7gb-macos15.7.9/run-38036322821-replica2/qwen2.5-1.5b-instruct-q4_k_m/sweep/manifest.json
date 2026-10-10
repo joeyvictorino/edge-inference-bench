@@ -1,0 +1,43 @@
+{
+  "schema": "edge-inference-bench/manifest/v1",
+  "kind": "sweep",
+  "engine": "llama.cpp",
+  "model_path": "models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+  "model_file": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+  "model_sha256": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+  "timestamp": "2026-10-10T08:00:46Z",
+  "host": {
+    "chip": "Apple M1 (Virtual)",
+    "model_identifier": "VirtualMac2,1",
+    "memory_bytes": 7516192768,
+    "cores_total": 3,
+    "cores_performance": 3,
+    "cores_efficiency": 0,
+    "macos": "15.7.9",
+    "macos_build": "24G830",
+    "llama_cpp_version": "0.4.0 (build 10809, commit 5266f24da)",
+    "llama_cpp_built_with": "built with AppleClang 17.0.0.17000604 for Darwin arm64",
+    "metal_note": "ggml_metal_device_init: tensor API disabled for pre-M5 and pre-A19 devices",
+    "llama_cpp_homebrew": "ggml 0.23.0;llama.cpp 0.4.0",
+    "host_slug": "gha-runner-apple-m1-virtual-7gb-macos15.7.9",
+    "host_kind": "gha-macos",
+    "runner": {
+      "virtualized": true,
+      "image_os": "macos15",
+      "image_version": "20260907.0337.1",
+      "runner_arch": "ARM64",
+      "runs_on": "macos-15",
+      "run_url": "https://github.com/joeyvictorino/edge-inference-bench/actions/runs/38036322821/attempts/1"
+    }
+  },
+  "grid": {
+    "repetitions": 3,
+    "prompts": "512,2048",
+    "gen": 128,
+    "threads": "2 3",
+    "batches": "512:256 512:512 1024:512",
+    "flash_attn": "off on",
+    "kv_cache": "f16 q8_0"
+  },
+  "smoke": false
+}

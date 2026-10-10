@@ -130,3 +130,45 @@ Consequences, applied in `.github/workflows/bench.yml` and documented in the
 README: the idle threshold cannot be met on these runners, so runner mode
 records the level instead of refusing; and the grid is reduced so that one
 model fits in a job.
+
+## First GitHub runner bench (2026-10-10)
+
+- Run 38035657893 stopped in the install step: Homebrew llama.cpp 0.4.0's
+  `llama-bench` rejects `--version` and the workflow grepped its output.
+- Run 38036114974 stopped before the first configuration: `jq --argjson`
+  received empty strings (no `hw.perflevel1.physicalcpu` key and no battery
+  line on the VM).
+- Run 38036322821 completed all four jobs (two models, two replicas each).
+  Its raw files are under `results/gha-runner-apple-m1-virtual-7gb-macos15.7.9/`
+  (replica 1, published) and `results/replicas/.../run-38036322821-replica2/`
+  (replica 2, with `compare.md` and `compare.json`).
+
+Wall time per completed sweep configuration was up to 443 s (1.5B) and up to
+1001 s (3B). Configurations that started below 85% idle, among those that
+completed: 1.5B 0 of 18 (replica 1) and 4 of 18 (replica 2); 3B 2 of 18 in
+each replica. The context-length stage started at 87 to 97% idle in all four
+jobs.
+
+Restricting the comparison to metrics whose configuration started at 85%
+idle or more in both replicas leaves the result unchanged in kind: 1.5B 12 of
+52 metrics within the published IQR (median absolute difference 17.9%), 3B 4
+of 55 (29.6%). Computed with:
+
+    python3 - <<'PY'
+    import json, statistics
+    H = 'gha-runner-apple-m1-virtual-7gb-macos15.7.9'
+    R = 'results/replicas/%s/run-38036322821-replica2' % H
+    c = json.load(open(R + '/compare.json'))
+    def met(base, m, stage, item):
+        p = '%s/%s/sweep/%s.env.json' % (base, m, item) if stage == 'sweep' else '%s/%s/context/stage-conditions.json' % (base, m)
+        return json.load(open(p)).get('quiet_threshold_met')
+    for m in sorted(c['by_model']):
+        rows = [r for r in c['rows'] if r['model'] == m
+                and met('results/' + H, m, r['stage'], r['item']) and met(R, m, r['stage'], r['item'])]
+        print(m, len(rows), sum(r['within_published_iqr'] for r in rows),
+              round(statistics.median(abs(r['delta_pct']) for r in rows), 1))
+    PY
+
+The idle check sees only the guest's CPU. Contention on the physical host or
+its GPU is invisible to it; that is a plausible cause of the spread, not a
+verified one.
