@@ -19,6 +19,9 @@ jobs:
         run: python3 -m py_compile scripts/*.py scripts/lib/*.py
       - name: Name audit
         run: scripts/name-audit.sh
+        env:
+          NAME_AUDIT_PATTERN: ${{ secrets.NAME_AUDIT_PATTERN }}
+          NAME_AUDIT_ALLOW_MISSING: ${{ github.event.pull_request.head.repo.fork && '1' || '0' }}
       - name: Summarize the test fixture (must not touch the README)
         run: |
           cp -r tests/fixtures/results /tmp/fixture-results
